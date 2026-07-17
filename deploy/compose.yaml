@@ -1,0 +1,31 @@
+name: family-learning
+
+services:
+  app:
+    image: family-learning:local
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    environment:
+      APP_DATA_DIR: /data
+      APP_DATABASE_URL: sqlite:////data/app.db
+      APP_ENVIRONMENT: production
+    volumes:
+      - ${FAMILY_LEARNING_DATA_DIR:-./data}:/data
+    ports:
+      - "${FAMILY_LEARNING_PORT:-8000}:8000"
+    restart: unless-stopped
+
+  worker:
+    image: family-learning:local
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    command: ["worker"]
+    environment:
+      APP_DATA_DIR: /data
+      APP_DATABASE_URL: sqlite:////data/app.db
+      APP_ENVIRONMENT: production
+    volumes:
+      - ${FAMILY_LEARNING_DATA_DIR:-./data}:/data
+    restart: unless-stopped

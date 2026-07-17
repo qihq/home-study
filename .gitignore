@@ -1,0 +1,15 @@
+node_modules/
+dist/
+local-data/
+deploy/data/
+*.key
+*.pyc
+__pycache__/
+.pytest_cache/
+.firecrawl/
+*.tar
+*.tar.sha256
+.env
+*.db
+*.db-journal
+*.db-wal

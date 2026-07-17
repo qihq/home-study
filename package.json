@@ -1,0 +1,9 @@
+{
+  "name": "family-learning",
+  "private": true,
+  "workspaces": ["frontend"],
+  "scripts": {
+    "test:backend": "cd backend && python -m pytest -q",
+    "test:frontend": "npm --workspace frontend test -- --run"
+  }
+}

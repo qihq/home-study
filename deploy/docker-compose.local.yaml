@@ -1,0 +1,16 @@
+name: family-learning-local
+
+services:
+  app:
+    image: family-learning:local
+    command: ["single"]
+    environment:
+      APP_DATA_DIR: /data
+      APP_DATABASE_URL: sqlite:////data/app.db
+      APP_ENVIRONMENT: production
+      APP_FRONTEND_DIR: /app/frontend-dist
+    volumes:
+      - ./data:/data
+    ports:
+      - "8001:8000"
+    restart: unless-stopped

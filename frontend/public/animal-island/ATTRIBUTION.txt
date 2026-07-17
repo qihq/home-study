@@ -1,0 +1,7 @@
+Animal Island UI assets and visual design
+Copyright (c) guokaigdg
+Source: https://github.com/guokaigdg/animal-island-ui
+License: Creative Commons Attribution-NonCommercial 4.0 International
+https://creativecommons.org/licenses/by-nc/4.0/
+
+Assets are used and adapted for this non-commercial family learning system.

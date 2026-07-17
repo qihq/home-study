@@ -1,0 +1,11 @@
+FROM family-learning:latest
+WORKDIR /app
+COPY backend ./backend
+COPY backend/app ./app
+COPY deploy/entrypoint.sh /entrypoint.sh
+COPY frontend/dist /app/frontend-dist
+RUN chmod +x /entrypoint.sh
+ENV APP_DATA_DIR=/data
+EXPOSE 8000
+ENTRYPOINT ["/entrypoint.sh"]
+CMD ["single"]
