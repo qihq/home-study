@@ -56,6 +56,10 @@ def create_app() -> FastAPI:
         def spa(path: str) -> FileResponse:
             if path.split('/', 1)[0] in {'uploads', 'voice-samples'}:
                 raise HTTPException(status_code=404, detail='Not Found')
+            # Serve root-level static files (favicon, icons, manifest) directly
+            file = frontend / path
+            if file.is_file():
+                return FileResponse(file)
             return FileResponse(frontend / 'index.html')
     return app
 
