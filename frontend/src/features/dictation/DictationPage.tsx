@@ -123,18 +123,24 @@ export function DictationPage({ words, wordListVersionId, resumeSessionId, onSco
   const lockedLabel = snapshotNames.speaker && snapshotNames.voice ? `${snapshotNames.speaker} / ${snapshotNames.voice}` : '会话声音已锁定'
   const pronunciationValue = current?.pronunciation_source === 'configured' || !snapshotNames.voice ? 'configured' : 'custom'
   return <section className="dictation-page">
-    <p className="date">第 {position + 1} / {words.length} 个</p>
-    <h1>单词默写</h1>
+    <header className="dictation-exercise-header"><div><p className="date">第 {position + 1} / {words.length} 个</p><h1>单词默写</h1></div><img src="/animal-island/chat.svg" alt="" /></header>
+    <section className="dictation-focus-card">
+      <p className="listen-prompt">请先听发音，再写下单词。</p>
+      <Button className="dictation-play-button" disabled={!audioReady} onClick={play}>{audioReady ? '播放发音' : '发音生成中'}</Button>
+      {revealed ? <div className="answer-area is-revealed"><strong>{word}</strong></div> : <button className="answer-area is-hidden" aria-label="显示答案" onClick={() => void reveal()}><span>答案已隐藏</span><small>点击这里显示单词</small></button>}
+      {revealed && <div className="dictation-actions"><Button disabled={completed} onClick={() => void score('correct')}>正确</Button><Button variant="danger" disabled={completed} onClick={() => void score('incorrect')}>错误</Button></div>}
+    </section>
     <div className="dictation-navigation">
       <Button variant="secondary" disabled={position === 0} onClick={() => setPosition(value => value - 1)}>上一个</Button>
       <label>跳转到<select aria-label="跳转到题目" value={position} onChange={event => setPosition(Number(event.target.value))}>{words.map((_, index) => <option key={index} value={index}>第 {index + 1} 个{results[index]?.result && results[index].result !== 'unscored' ? '（已完成）' : ''}</option>)}</select></label>
       <Button variant="secondary" disabled={position === words.length - 1} onClick={() => setPosition(value => value + 1)}>下一个</Button>
     </div>
-    {wordListVersionId && <><label>朗读使用人<select aria-label="朗读使用人" value={selectedSpeakerId} disabled><option value={selectedSpeakerId}>{snapshotNames.speaker ?? '会话声音已锁定'}</option></select></label><label>声音版本<select aria-label="声音版本" value={selectedVoiceId} disabled><option value={selectedVoiceId}>{snapshotNames.voice ?? '会话声音已锁定'}</option></select></label><p>{lockedLabel}</p></>}
-    {sessionId && current?.word_item_id && <div className="pronunciation-controls"><label>当前单词发音<select aria-label="当前单词发音" disabled={pronunciationBusy} value={pronunciationValue} onChange={event => void changePronunciation(event.target.value as 'configured' | 'custom')}><option value="configured">原生发音</option>{snapshotNames.voice && <option value="custom">自定义声音</option>}</select></label><Button variant="secondary" disabled={pronunciationBusy} onClick={() => void changePronunciation(pronunciationValue, true)}>{pronunciationBusy ? '重新生成中' : pronunciationValue === 'custom' ? '重新生成自定义发音' : '重新生成原生发音'}</Button></div>}
-    <p className="listen-prompt">请先听发音，再写下单词。</p>
-    <div className="answer-area">{revealed ? <strong>{word}</strong> : <span>答案已隐藏</span>}</div>
-    <div className="dictation-actions"><Button disabled={!audioReady} onClick={play}>{audioReady ? '播放发音' : '发音生成中'}</Button><Button variant="secondary" onClick={() => void reveal()}>显示答案</Button>{revealed && <><Button disabled={completed} onClick={() => void score('correct')}>正确</Button><Button variant="danger" disabled={completed} onClick={() => void score('incorrect')}>错误</Button></>}</div>
+    {wordListVersionId && <details className="pronunciation-settings"><summary>发音设置</summary><div className="pronunciation-settings-content">
+      <p>{lockedLabel}</p>
+      <label>朗读使用人<select aria-label="朗读使用人" value={selectedSpeakerId} disabled><option value={selectedSpeakerId}>{snapshotNames.speaker ?? '会话声音已锁定'}</option></select></label>
+      <label>声音版本<select aria-label="声音版本" value={selectedVoiceId} disabled><option value={selectedVoiceId}>{snapshotNames.voice ?? '会话声音已锁定'}</option></select></label>
+      {sessionId && current?.word_item_id && <div className="pronunciation-controls"><label>当前单词发音<select aria-label="当前单词发音" disabled={pronunciationBusy} value={pronunciationValue} onChange={event => void changePronunciation(event.target.value as 'configured' | 'custom')}><option value="configured">原生发音</option>{snapshotNames.voice && <option value="custom">自定义声音</option>}</select></label><Button variant="secondary" disabled={pronunciationBusy} onClick={() => void changePronunciation(pronunciationValue, true)}>{pronunciationBusy ? '重新生成中' : pronunciationValue === 'custom' ? '重新生成自定义发音' : '重新生成原生发音'}</Button></div>}
+    </div></details>}
   </section>
 }
 

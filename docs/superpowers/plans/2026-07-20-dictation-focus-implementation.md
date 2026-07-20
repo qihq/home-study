@@ -14,6 +14,10 @@
 - Reuse existing Animal Island assets and design tokens.
 - Keep the hidden answer control keyboard accessible.
 
+## Execution Progress
+
+- 2026-07-20: Task 1 implemented. The hidden answer panel is the semantic reveal button, scoring appears after reveal, and locked voice/pronunciation regeneration controls live inside a `发音设置` disclosure. Six focused tests and the frontend production build pass.
+
 ---
 
 ### Task 1: Interactive Answer Panel and Visual Hierarchy
@@ -92,4 +96,3 @@ Expected: PASS.
 git add frontend/src/features/dictation/DictationPage.tsx frontend/src/features/dictation/DictationPage.test.tsx frontend/src/styles.css
 git commit -m "feat: simplify and focus dictation exercise"
 ```
-
