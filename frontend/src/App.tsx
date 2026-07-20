@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { api, apiAudio, apiBlob } from "./api/client";
 import { LoginPage } from "./features/auth/LoginPage";
 import { DashboardPage } from "./features/dashboard/DashboardPage";
@@ -149,6 +149,8 @@ export function App() {
         <RecordingPage
           language={screen}
           recovery={recoveries.find((item) => item.language === screen)}
+          onHome={() => setScreen("home")}
+          onOpenVideos={() => setScreen("videos")}
           onBack={() => {
             void recordingStore.listSessions().then(setRecoveries);
             setScreen("home");
@@ -657,20 +659,35 @@ function VoicesScreen({ onNavigate }: { onNavigate: (item: string) => void }) {
 
 function VideosScreen({ onNavigate }: { onNavigate: (item: string) => void }) {
   const [videos, setVideos] = useState<RecordingItem[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const workerOnline = useWorkerHealth();
-  const load = () =>
-    void api<RecordingItem[]>("/recordings")
+  const load = useCallback((background = false) => {
+    if (!background) setLoading(true);
+    setLoadError(null);
+    return api<RecordingItem[]>("/recordings")
       .then(setVideos)
-      .catch(() => setVideos([]));
-  useEffect(load, []);
+      .catch(() => setLoadError("请检查网络或稍后再试，已有视频没有被删除。"))
+      .finally(() => { if (!background) setLoading(false) });
+  }, []);
+  useEffect(() => { void load() }, [load]);
+  const hasPendingWork = videos.some(video => ["assembling", "transcoding"].includes(video.status));
+  useEffect(() => {
+    if (!hasPendingWork) return;
+    const timer = window.setInterval(() => void load(true), 5000);
+    return () => window.clearInterval(timer);
+  }, [hasPendingWork, load]);
   return (
     <AppShell onNavigate={onNavigate} activeDestination="视频库">
       <VideoLibrary
         recordings={videos}
+        loading={loading}
+        loadError={loadError}
+        onRetry={() => void load()}
         workerOnline={workerOnline}
         onMakeOfficial={(id) => {
           void api(`/recordings/${id}/make-official`, { method: "POST" }).then(
-            load,
+            () => load(),
           );
         }}
         onRename={async (id, title) => {
@@ -683,6 +700,10 @@ function VideosScreen({ onNavigate }: { onNavigate: (item: string) => void }) {
         onDelete={async (id) => {
           await api(`/recordings/${id}`, { method: "DELETE" });
           load();
+        }}
+        onRetryProcessing={async (id) => {
+          await api(`/recordings/${id}/retry`, { method: "POST" });
+          await load(true);
         }}
       />
     </AppShell>

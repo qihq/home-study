@@ -19,6 +19,7 @@
 ## Execution Progress
 
 - 2026-07-20: Tasks 1-2 implemented. Focused backend verification passes: 23 worker, health, recording, fMP4, and download tests. The worker renews heartbeat/lease during work, media failures retry with backoff, stuck processing states are reconciled, and exhausted failures expose an authenticated retry endpoint.
+- 2026-07-20: Tasks 3-4 implemented. Recording duration, camera-switch continuity, frozen completion duration, explicit home/library destinations, calendar filtering, failure retry, and conditional polling pass 17 focused video-library tests plus 12 recording/router tests. The frontend production build passes.
 
 ---
 
