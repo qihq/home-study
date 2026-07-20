@@ -56,6 +56,28 @@ def test_run_once_retries_media_failure_and_keeps_recording_processing(session, 
     assert recording.status == 'transcoding'
 
 
+def test_run_once_retries_unexpected_media_exception_with_the_same_attempt_limit(session, monkeypatch) -> None:
+    from datetime import date
+    from app.models.child import Child
+    from app.models.job import Job
+    from app.models.recording import Recording
+    from app.workers.runner import run_once
+
+    child = Child(display_name='孩子', slug='unexpected-media-child'); session.add(child); session.flush()
+    recording = Recording(child_id=child.id, reading_date=date.today(), language_type='english', status='transcoding', source_path='/data/source.mp4')
+    session.add(recording); session.flush()
+    job = Job(type='transcode_video', entity_id=recording.id, max_attempts=3)
+    session.add(job); session.commit()
+    monkeypatch.setattr('app.workers.runner.process_transcode_video', lambda *_: (_ for _ in ()).throw(OSError('disk temporarily unavailable')))
+
+    assert run_once(session, 'test-worker') is True
+    session.refresh(job); session.refresh(recording)
+
+    assert job.status == 'queued'
+    assert job.error_code == 'JOB_PROCESSING_FAILED'
+    assert recording.status == 'transcoding'
+
+
 def test_worker_startup_requeues_media_voice_and_stale_tts(session) -> None:
     from datetime import date
     from app.models.child import Child

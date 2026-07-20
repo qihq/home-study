@@ -59,3 +59,17 @@ def test_all_in_one_images_start_api_and_worker_by_default() -> None:
     for dockerfile in ('Dockerfile', 'Dockerfile.release-local'):
         content = (root / 'deploy' / dockerfile).read_text(encoding='utf-8')
         assert 'CMD ["single"]' in content
+
+
+def test_docker_python_installs_apply_timeout_and_retries_to_all_downloads() -> None:
+    content = (Path(__file__).parents[2] / 'deploy' / 'Dockerfile').read_text(encoding='utf-8')
+
+    assert 'ENV PIP_DEFAULT_TIMEOUT=300 PIP_RETRIES=10' in content
+    assert 'PIP_DEFAULT_TIMEOUT=300 PIP_RETRIES=10 pip install' not in content
+
+
+def test_docker_python_index_is_configurable_for_reliable_builds() -> None:
+    content = (Path(__file__).parents[2] / 'deploy' / 'Dockerfile').read_text(encoding='utf-8')
+
+    assert 'ARG PIP_INDEX_URL=' in content
+    assert 'ENV PIP_INDEX_URL=${PIP_INDEX_URL}' in content

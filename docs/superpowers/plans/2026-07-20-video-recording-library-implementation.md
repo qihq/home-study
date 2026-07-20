@@ -21,6 +21,7 @@
 - 2026-07-20: Tasks 1-2 implemented. Focused backend verification passes: 23 worker, health, recording, fMP4, and download tests. The worker renews heartbeat/lease during work, media failures retry with backoff, stuck processing states are reconciled, and exhausted failures expose an authenticated retry endpoint.
 - 2026-07-20: Tasks 3-4 implemented. Recording duration, camera-switch continuity, frozen completion duration, explicit home/library destinations, calendar filtering, failure retry, and conditional polling pass 17 focused video-library tests plus 12 recording/router tests. The frontend production build passes.
 - 2026-07-20: Reconciliation audit completed. Idle workers periodically repair missing processing jobs, but exhausted failures remain stable until the user explicitly retries them. The calendar initializes to the newest date after asynchronous loading without overriding a later `显示全部` choice. Five worker-runner and ten calendar/library regression tests pass.
+- 2026-07-20: Final QA completed. The desktop recording preview is 16:9 and capped at 820px so the primary recording action remains in a 1280x720 first viewport; the 390x844 mobile view keeps its 3:4 preview without horizontal overflow. Browser checks found no console warnings or errors. Full verification passes with 164 backend tests, 60 frontend tests, and a production frontend build. A complete Docker image build remains unverified because PyPI downloads stalled; the Dockerfile now supports a configurable index plus bounded timeout and retries.
 
 ---
 

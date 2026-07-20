@@ -17,6 +17,7 @@
 ## Execution Progress
 
 - 2026-07-20: Task 1 implemented. The hidden answer panel is the semantic reveal button, scoring appears after reveal, and locked voice/pronunciation regeneration controls live inside a `发音设置` disclosure. Six focused tests and the frontend production build pass.
+- 2026-07-20: Browser QA confirmed the primary listening control appears first, the entire `答案已隐藏` panel reveals `apple` when clicked, and pronunciation settings remain collapsed by default. The final frontend suite passes all 60 tests and the production build.
 
 ---
 

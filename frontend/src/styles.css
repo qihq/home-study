@@ -40,3 +40,4 @@
 
 @media(max-width:460px){.island-hero>div{max-width:74%}.island-hero img{right:-42px;width:180px}}
 @media(max-width:460px){.island-hero>div{max-width:100%}.island-hero>div>p:last-child{max-width:62%}.island-hero img{right:2px;width:138px}.island-hero h1{font-size:30px}}
+@media(min-width:700px){.recording-stage{width:100%;max-width:820px;justify-self:center}.recording-stage .preview{aspect-ratio:16/9}}

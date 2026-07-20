@@ -52,8 +52,8 @@ class LocalDictionary:
                     row = connection.execute('SELECT * FROM ecdict WHERE word = ?', (alias['word'],)).fetchone()
         if row is None:
             return None
-        translations = [line.strip() for line in (row['translation'] or '').splitlines() if line.strip()]
-        definitions = [line.strip() for line in (row['definition'] or '').splitlines() if line.strip()]
+        translations = [line.strip() for line in (row['translation'] or '').replace('\\n', '\n').splitlines() if line.strip()]
+        definitions = [line.strip() for line in (row['definition'] or '').replace('\\n', '\n').splitlines() if line.strip()]
         primary = translations[0] if translations else definitions[0] if definitions else row['word']
         parts = []
         if row['pos']:

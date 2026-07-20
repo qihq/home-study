@@ -20,6 +20,7 @@
 
 - 2026-07-20: Tasks 3-4 pronunciation regeneration slice implemented. Normal playback reuses its deterministic cache; forced regeneration creates a new owned asset and preserves the old audio. Three focused backend security/cache tests, eleven frontend dictionary/router tests, and the production build pass. Local dictionary provenance UI remains pending until Tasks 1-2.
 - 2026-07-20: Tasks 1-2 and provenance UI implemented. A reproducible builder locks ECDICT to `bc015ed2e24a` and records the CC-CEDICT checksum, producing a 100,044,800-byte read-only SQLite database with 770,611 English entries, 96,851 aliases, and 124,718 Chinese entries. Real-data integrity is `ok`; English exact/inflected lookup and simplified/traditional Chinese lookup pass. Twenty-one focused backend and twelve frontend tests pass. The `苹果` collision now prefers the lowercase-pinyin common noun and keeps the Apple company sense as an alternative.
+- 2026-07-20: Final QA confirmed local `apple` lookup reports ECDICT provenance and exposes both playback and regeneration. Literal ECDICT `\\n` separators are normalized into separate definitions. Full verification passes with 164 backend tests, 60 frontend tests, and a production frontend build.
 
 ---
 

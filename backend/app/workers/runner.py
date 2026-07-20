@@ -72,6 +72,23 @@ def _set_progress(session: Session, job_id: str, progress: int) -> None:
         session.commit()
 
 
+def _retry_media_job(session: Session, job, current_time: datetime, error_code: str, error_detail: str) -> None:
+    from app.models.recording import Recording
+
+    if job.attempts < job.max_attempts:
+        job.status = 'queued'
+        job.run_after = current_time + timedelta(minutes=min(2 ** job.attempts, 60))
+        recording = session.get(Recording, job.entity_id)
+        if recording is not None:
+            recording.status = 'assembling' if job.type == 'assemble_video' else 'transcoding'
+    else:
+        job.status = 'failed'
+    job.error_code = error_code[:80]
+    job.error_detail = error_detail[:500]
+    job.locked_by = None
+    job.locked_at = None
+
+
 def run_once(session: Session, worker_id: str, now: datetime | None = None) -> bool:
     current_time = now or datetime.now(timezone.utc)
     job = claim_next_job(session, worker_id, current_time)
@@ -110,25 +127,17 @@ def run_once(session: Session, worker_id: str, now: datetime | None = None) -> b
         except MediaError as error:
             session.rollback()
             job = session.get(type(job), job.id)
-            if job.attempts < job.max_attempts:
-                job.status = 'queued'
-                job.run_after = current_time + timedelta(minutes=min(2 ** job.attempts, 60))
-                from app.models.recording import Recording
-                recording = session.get(Recording, job.entity_id)
-                if recording is not None:
-                    recording.status = 'assembling' if job.type == 'assemble_video' else 'transcoding'
-            else:
-                job.status = 'failed'
-            job.error_code = str(error)[:80]
-            job.error_detail = str(error)[:500]
-            job.locked_by = None
-            job.locked_at = None
+            _retry_media_job(session, job, current_time, str(error), str(error))
         except Exception as error:
             session.rollback()
             job = session.get(type(job), job.id)
-            job.status = 'failed'
-            job.error_code = 'JOB_PROCESSING_FAILED'
-            job.error_detail = str(error)[:500] or '任务处理失败，请在管理页重试。'
+            detail = str(error) or '任务处理失败，请在管理页重试。'
+            if job.type in {'assemble_video', 'transcode_video'}:
+                _retry_media_job(session, job, current_time, 'JOB_PROCESSING_FAILED', detail)
+            else:
+                job.status = 'failed'
+                job.error_code = 'JOB_PROCESSING_FAILED'
+                job.error_detail = detail[:500]
         finally:
             activity.stop()
     session.commit()
