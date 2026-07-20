@@ -40,3 +40,31 @@ def claim_next_job(session: Session, worker_id: str, now: datetime) -> Job | Non
     session.commit()
     session.refresh(job)
     return job
+
+
+def renew_job_lease(session: Session, job_id: str, worker_id: str, now: datetime) -> bool:
+    job = session.get(Job, job_id)
+    if job is None or job.status != 'running' or job.locked_by != worker_id:
+        return False
+    job.locked_at = now
+    session.commit()
+    return True
+
+
+def reset_failed_job(session: Session, job_type: str, entity_id: str, now: datetime | None = None) -> Job:
+    job = session.scalar(select(Job).where(
+        Job.type == job_type,
+        Job.entity_id == entity_id,
+        Job.status.in_(['failed', 'superseded']),
+    ).order_by(Job.created_at.desc()))
+    if job is None:
+        job = enqueue_once(session, job_type, entity_id)
+    job.status = 'queued'
+    job.attempts = 0
+    job.progress = 0
+    job.run_after = now or datetime.now().astimezone()
+    job.locked_by = None
+    job.locked_at = None
+    job.error_code = None
+    job.error_detail = None
+    return job

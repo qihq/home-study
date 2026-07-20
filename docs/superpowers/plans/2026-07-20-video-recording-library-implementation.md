@@ -16,6 +16,10 @@
 - Do not require a container restart for recoverable media work.
 - Keep the persistent `/data` deployment mount unchanged.
 
+## Execution Progress
+
+- 2026-07-20: Tasks 1-2 implemented. Focused backend verification passes: 23 worker, health, recording, fMP4, and download tests. The worker renews heartbeat/lease during work, media failures retry with backoff, stuck processing states are reconciled, and exhausted failures expose an authenticated retry endpoint.
+
 ---
 
 ### Task 1: Worker Activity and Retry State Machine
@@ -354,4 +358,3 @@ Add health states, automatic retry semantics, exhausted failure retry steps, and
 git add docs/DEPLOYMENT.md docs/superpowers/plans/2026-07-20-video-recording-library-implementation.md
 git commit -m "docs: record video processing recovery workflow"
 ```
-

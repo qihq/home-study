@@ -2,7 +2,7 @@ import socket
 import time
 import json
 import traceback
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy.orm import Session
 
@@ -11,6 +11,8 @@ from app.services.jobs import claim_next_job
 from app.workers.video import process_assemble_video, process_transcode_video
 from app.workers.tts import process_generate_tts
 from app.workers.voice import process_normalize_voice_sample, process_voice_preview
+from app.workers.activity import WorkerActivity, touch_worker_heartbeat
+from app.workers.video import MediaError
 
 
 def repair_pending_work(session: Session) -> None:
@@ -23,6 +25,10 @@ def repair_pending_work(session: Session) -> None:
 
     for recording in session.scalars(select(Recording).where(Recording.status == 'transcode_failed', Recording.source_path.is_not(None))):
         recording.status = 'transcoding'
+        enqueue_once(session, 'transcode_video', recording.id)
+    for recording in session.scalars(select(Recording).where(Recording.status == 'assembling')):
+        enqueue_once(session, 'assemble_video', recording.id)
+    for recording in session.scalars(select(Recording).where(Recording.status == 'transcoding', Recording.source_path.is_not(None))):
         enqueue_once(session, 'transcode_video', recording.id)
     for voice in session.scalars(select(VoiceVersion).where(
         VoiceVersion.status == 'failed',
@@ -60,7 +66,8 @@ def _set_progress(session: Session, job_id: str, progress: int) -> None:
 
 
 def run_once(session: Session, worker_id: str, now: datetime | None = None) -> bool:
-    job = claim_next_job(session, worker_id, now or datetime.now(timezone.utc))
+    current_time = now or datetime.now(timezone.utc)
+    job = claim_next_job(session, worker_id, current_time)
     if job is None:
         return False
     job.progress = 5
@@ -78,17 +85,45 @@ def run_once(session: Session, worker_id: str, now: datetime | None = None) -> b
         job.error_code = 'UNKNOWN_JOB_TYPE'
         job.error_detail = f'No handler for {job.type}'
     else:
+        from app.core.config import get_settings
+        activity = WorkerActivity(get_settings().data_dir, worker_id, job.id)
         try:
+            activity.start()
             handler(session, job.entity_id, lambda progress: _set_progress(session, job.id, progress))
+            session.refresh(job)
+            if job.type in {'assemble_video', 'transcode_video'}:
+                from app.models.recording import Recording
+                recording = session.get(Recording, job.entity_id)
+                failed_state = 'assemble_failed' if job.type == 'assemble_video' else 'transcode_failed'
+                if recording is not None and recording.status == failed_state:
+                    raise MediaError(failed_state.upper())
             if job.status == 'running':
                 job.status = 'succeeded'
                 job.progress = 100
+        except MediaError as error:
+            session.rollback()
+            job = session.get(type(job), job.id)
+            if job.attempts < job.max_attempts:
+                job.status = 'queued'
+                job.run_after = current_time + timedelta(minutes=min(2 ** job.attempts, 60))
+                from app.models.recording import Recording
+                recording = session.get(Recording, job.entity_id)
+                if recording is not None:
+                    recording.status = 'assembling' if job.type == 'assemble_video' else 'transcoding'
+            else:
+                job.status = 'failed'
+            job.error_code = str(error)[:80]
+            job.error_detail = str(error)[:500]
+            job.locked_by = None
+            job.locked_at = None
         except Exception as error:
             session.rollback()
             job = session.get(type(job), job.id)
             job.status = 'failed'
             job.error_code = 'JOB_PROCESSING_FAILED'
             job.error_detail = str(error)[:500] or '任务处理失败，请在管理页重试。'
+        finally:
+            activity.stop()
     session.commit()
     return True
 
@@ -100,8 +135,7 @@ def main() -> None:
     while True:
         try:
             from app.core.config import get_settings
-            heartbeat = get_settings().data_dir / 'worker-heartbeat.json'
-            heartbeat.write_text(json.dumps({'worker_id': worker_id, 'updated_at': datetime.now(timezone.utc).isoformat()}), encoding='utf-8')
+            touch_worker_heartbeat(get_settings().data_dir, worker_id, busy=False)
             with get_session_factory()() as session:
                 processed = run_once(session, worker_id)
             if not processed:

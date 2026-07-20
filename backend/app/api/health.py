@@ -40,16 +40,23 @@ def has_vaapi() -> bool:
 
 
 @router.get('/health')
-def health() -> dict[str, bool | str]:
+def health() -> dict[str, bool | str | None]:
     settings = get_settings()
     heartbeat = settings.data_dir / 'worker-heartbeat.json'
     worker = False
+    worker_state = 'offline'
+    updated: datetime | None = None
     if heartbeat.is_file():
         try:
-            updated = datetime.fromisoformat(json.loads(heartbeat.read_text(encoding='utf-8'))['updated_at'])
+            heartbeat_data = json.loads(heartbeat.read_text(encoding='utf-8'))
+            updated = datetime.fromisoformat(heartbeat_data['updated_at'])
             worker = (datetime.now(timezone.utc) - updated).total_seconds() < 15
+            if worker:
+                worker_state = 'busy' if heartbeat_data.get('busy') else 'online'
         except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):
             worker = False
+            worker_state = 'offline'
+            updated = None
     return {
         'status': 'ok',
         'database': True,
@@ -57,4 +64,6 @@ def health() -> dict[str, bool | str]:
         'ffmpeg': has_ffmpeg(),
         'vaapi': has_vaapi(),
         'worker': worker,
+        'worker_state': worker_state,
+        'worker_updated_at': updated.isoformat() if updated else None,
     }

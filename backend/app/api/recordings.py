@@ -7,7 +7,7 @@ from app.api.deps import DbSession, require_user
 from app.models.recording import Recording
 from app.models.user import User
 from app.services.recordings import ChunkConflict, create_recording, delete_recording, missing_sequences, upload_chunk
-from app.services.jobs import enqueue_once
+from app.services.jobs import enqueue_once, reset_failed_job
 
 router = APIRouter(tags=['recordings'])
 class CreateRecording(BaseModel): language_type: Literal['chinese','english']
@@ -53,6 +53,22 @@ def complete(recording_id: str, payload: CompleteRecording, session: DbSession, 
         enqueue_once(session, 'assemble_video', record.id)
         session.commit()
     return {'missing_sequences':missing,'status':record.status}
+
+
+@router.post('/recordings/{recording_id}/retry', status_code=status.HTTP_202_ACCEPTED)
+def retry(recording_id: str, session: DbSession, _user: Annotated[User, Depends(require_user)]) -> dict:
+    record = get_recording(session, recording_id)
+    if record.status == 'transcode_failed' and record.source_path and record.source_validated_at:
+        record.status = 'transcoding'
+        job_type = 'transcode_video'
+    elif record.status == 'assemble_failed':
+        record.status = 'assembling'
+        job_type = 'assemble_video'
+    else:
+        raise HTTPException(409, detail={'code': 'RECORDING_NOT_RETRYABLE', 'message': '当前视频状态不支持重新处理'})
+    reset_failed_job(session, job_type, record.id)
+    session.commit()
+    return {'status': record.status}
 
 
 @router.get('/recordings/{recording_id}/chunks')
