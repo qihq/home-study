@@ -21,7 +21,7 @@ it('supports automatic and manual directions, playback, unknown marking, and cac
   expect(await screen.findByText('I like apples.')).toBeVisible()
   expect(screen.getByText('已命中缓存')).toBeVisible()
   await user.selectOptions(screen.getByLabelText('朗读声音'), 'voice-1')
-  await user.click(screen.getByRole('button', { name: '播放英文' }))
+  await user.click(screen.getByRole('button', { name: '播放发音' }))
   await user.click(screen.getByRole('button', { name: '标记不认识' }))
   expect(onPlay).toHaveBeenCalledWith('entry-1', 'voice-1')
   expect(onMarkUnknown).toHaveBeenCalledWith('entry-1')
@@ -52,7 +52,24 @@ it('limits input to 2,000 characters and plays English with the selected ready v
   await user.click(screen.getByRole('button', { name: '查询' }))
   await screen.findByText('苹果')
   await user.selectOptions(screen.getByLabelText('朗读声音'), 'voice-1')
-  await user.click(screen.getByRole('button', { name: '播放英文' }))
+  await user.click(screen.getByRole('button', { name: '播放发音' }))
 
   expect(onPlay).toHaveBeenCalledWith('entry-1', 'voice-1')
+})
+
+it('can force pronunciation regeneration while preserving the selected voice', async () => {
+  const user = userEvent.setup()
+  const onPlay = vi.fn().mockResolvedValue(undefined)
+  render(<DictionaryPage onLookup={vi.fn().mockResolvedValue({
+    entry_id: 'entry-apple', source_language: 'en', target_language: 'zh', item_type: 'word', source_text: 'apple',
+    primary_translation: '苹果', phonetic: null, parts_of_speech: [], alternatives: [], examples: [], usage_note: null, cache_hit: false,
+  })} onPlay={onPlay} onMarkUnknown={vi.fn()} voices={[{ id: 'voice-1', display_name: '妈妈 / 清晰美音' }]} />)
+
+  await user.type(screen.getByLabelText('查询内容'), 'apple')
+  await user.click(screen.getByRole('button', { name: '查询' }))
+  await user.selectOptions(screen.getByLabelText('朗读声音'), 'voice-1')
+  await user.click(screen.getByRole('button', { name: '重新生成发音' }))
+
+  expect(onPlay).toHaveBeenCalledWith('entry-apple', 'voice-1', true)
+  expect(screen.getByRole('status')).toHaveTextContent('新发音已生成并播放')
 })

@@ -3,6 +3,7 @@ import json
 from datetime import datetime
 from hashlib import sha256
 from typing import Annotated, Literal
+from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse
@@ -33,6 +34,7 @@ class DictionaryLookupRequest(BaseModel):
 
 class DictionaryAudioRequest(BaseModel):
     voice_version_id: str | None = None
+    regenerate: bool = False
 
 
 def _current_child(session: DbSession) -> Child:
@@ -80,8 +82,11 @@ def dictionary_audio(entry_id: str, payload: DictionaryAudioRequest, session: Db
             raise HTTPException(404, detail={'code': 'SPEAKER_NOT_FOUND', 'message': 'Speaker not found'})
         require_resource_owner(session, speaker.owner_user_id, user)
     voice_key = voice.id if voice else 'default'
-    cache_key = sha256(f'dictionary:v{AUDIO_VERSION}:{user.id}:{voice_key}:{text}'.encode()).hexdigest()
-    asset = session.query(TtsAsset).filter_by(cache_key=cache_key, status='ready', owner_user_id=user.id).first()
+    cache_material = f'dictionary:v{AUDIO_VERSION}:{user.id}:{voice_key}:{text}'
+    if payload.regenerate:
+        cache_material += f':regenerated:{uuid4()}'
+    cache_key = sha256(cache_material.encode()).hexdigest()
+    asset = None if payload.regenerate else session.query(TtsAsset).filter_by(cache_key=cache_key, status='ready', owner_user_id=user.id).first()
     if asset is None:
         try:
             path = generate_text_with_voice(session, voice.id, text) if voice else generate_configured_tts(session, text)

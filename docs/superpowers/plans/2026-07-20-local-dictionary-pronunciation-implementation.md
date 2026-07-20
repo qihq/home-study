@@ -16,6 +16,10 @@
 - Preserve existing dictionary history and TTS asset ownership controls.
 - Do not overwrite a previously playable pronunciation during regeneration.
 
+## Execution Progress
+
+- 2026-07-20: Tasks 3-4 pronunciation regeneration slice implemented. Normal playback reuses its deterministic cache; forced regeneration creates a new owned asset and preserves the old audio. Three focused backend security/cache tests, eleven frontend dictionary/router tests, and the production build pass. Local dictionary provenance UI remains pending until Tasks 1-2.
+
 ---
 
 ### Task 1: Local Lexicon Adapter and Reproducible Data Preparation

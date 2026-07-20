@@ -132,7 +132,7 @@ it("wires the dictionary and AI settings pages to their API endpoints", async ()
     { method: "POST" },
   );
   await user.selectOptions(screen.getByLabelText("朗读声音"), "voice-1");
-  await user.click(screen.getByRole("button", { name: "播放英文" }));
+  await user.click(screen.getByRole("button", { name: "播放发音" }));
   expect(mockedApi).toHaveBeenCalledWith("/dictionary/entries/entry-1/audio", {
     method: "POST",
     body: JSON.stringify({ voice_version_id: "voice-1" }),

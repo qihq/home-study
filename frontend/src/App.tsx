@@ -356,12 +356,12 @@ function DictionaryScreen({
       .then(setVoices)
       .catch(() => setVoices([]));
   }, []);
-  const play = async (entryId: string, voiceVersionId?: string) => {
+  const play = async (entryId: string, voiceVersionId?: string, regenerate = false) => {
     const { asset_id } = await api<{ asset_id: string }>(
       `/dictionary/entries/${entryId}/audio`,
       {
         method: "POST",
-        body: JSON.stringify({ voice_version_id: voiceVersionId || null }),
+        body: JSON.stringify(regenerate ? { voice_version_id: voiceVersionId || null, regenerate: true } : { voice_version_id: voiceVersionId || null }),
       },
     );
     const source = URL.createObjectURL(

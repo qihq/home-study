@@ -33,6 +33,39 @@ def test_dictionary_audio_returns_authenticated_asset_for_a_ready_selected_voice
         assert anonymous_client.get(f"/api/tts-assets/{response.json()['asset_id']}/audio").status_code == 401
 
 
+def test_dictionary_audio_regeneration_creates_new_asset_and_preserves_old_audio(client: TestClient, admin_user, monkeypatch, tmp_path) -> None:
+    from app.db.session import get_session_factory
+    from app.models.dictionary import DictionaryEntry
+
+    login = client.post('/api/auth/login', json={'username': 'parent', 'password': 'correct horse'})
+    headers = {'Cookie': login.headers['set-cookie'].split(';', 1)[0]}
+    with get_session_factory()() as session:
+        entry = DictionaryEntry(
+            query_hash='r' * 64,
+            result_json='{"source_language":"en","source_text":"apple","primary_translation":"苹果"}',
+        )
+        session.add(entry); session.commit(); entry_id = entry.id
+
+    generation = 0
+    def generate(_session, _text):
+        nonlocal generation
+        generation += 1
+        path = tmp_path / f'apple-{generation}.wav'
+        path.write_bytes(f'wav-{generation}'.encode())
+        return path
+
+    monkeypatch.setattr('app.api.dictionary.generate_configured_tts', generate)
+    first = client.post(f'/api/dictionary/entries/{entry_id}/audio', json={}, headers=headers)
+    cached = client.post(f'/api/dictionary/entries/{entry_id}/audio', json={'regenerate': False}, headers=headers)
+    regenerated = client.post(f'/api/dictionary/entries/{entry_id}/audio', json={'regenerate': True}, headers=headers)
+
+    assert first.status_code == cached.status_code == regenerated.status_code == 200
+    assert cached.json()['asset_id'] == first.json()['asset_id']
+    assert regenerated.json()['asset_id'] != first.json()['asset_id']
+    assert client.get(f"/api/tts-assets/{first.json()['asset_id']}/audio", headers=headers).content == b'wav-1'
+    assert client.get(f"/api/tts-assets/{regenerated.json()['asset_id']}/audio", headers=headers).content == b'wav-2'
+
+
 def test_dictionary_audio_and_asset_are_not_accessible_to_another_user(client: TestClient, admin_user, monkeypatch, tmp_path) -> None:
     from app.db.session import get_session_factory
     from app.models.child import Child
