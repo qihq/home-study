@@ -4,4 +4,9 @@ Source: https://github.com/guokaigdg/animal-island-ui
 License: Creative Commons Attribution-NonCommercial 4.0 International
 https://creativecommons.org/licenses/by-nc/4.0/
 
+Dictionary data:
+- ECDICT by skywind3000, MIT License: https://github.com/skywind3000/ECDICT
+- CC-CEDICT, Creative Commons Attribution-ShareAlike 3.0:
+  https://cc-cedict.org/wiki/ and https://creativecommons.org/licenses/by-sa/3.0/
+
 Assets are used and adapted for this non-commercial family learning system.

@@ -82,3 +82,24 @@ def test_worker_startup_requeues_media_voice_and_stale_tts(session) -> None:
     assert session.query(Job).filter_by(type='assemble_video', entity_id=assembling.id, status='queued').count() == 1
     assert session.query(Job).filter_by(type='transcode_video', entity_id=transcoding.id, status='queued').count() == 1
     assert session.query(Job).filter_by(type='normalize_voice_sample', entity_id=voice.id, status='queued').count() == 1
+
+
+def test_repair_does_not_restart_an_exhausted_media_failure(session) -> None:
+    from datetime import date
+    from app.models.child import Child
+    from app.models.job import Job
+    from app.models.recording import Recording
+    from app.workers.runner import repair_pending_work
+
+    child = Child(display_name='孩子', slug='exhausted-media-child'); session.add(child); session.flush()
+    recording = Recording(child_id=child.id, reading_date=date.today(), language_type='english', status='transcode_failed', source_path='/data/source.mp4')
+    session.add(recording); session.flush()
+    job = Job(type='transcode_video', entity_id=recording.id, status='failed', attempts=5, max_attempts=5)
+    session.add(job); session.commit()
+
+    repair_pending_work(session)
+    session.refresh(recording); session.refresh(job)
+
+    assert recording.status == 'transcode_failed'
+    assert job.status == 'failed'
+    assert session.query(Job).filter_by(type='transcode_video', entity_id=recording.id).count() == 1

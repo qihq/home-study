@@ -1,5 +1,6 @@
 import base64
 import json
+import re
 from datetime import datetime
 from hashlib import sha256
 from typing import Annotated, Literal
@@ -11,13 +12,15 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 
 from app.api.deps import DbSession, require_resource_owner, require_user
+from app.core.config import get_settings
 from app.models.child import Child
 from app.models.dictionary import DictionaryEntry, DictionaryHistory
 from app.models.speaker import SpeakerProfile, VoiceVersion
 from app.models.tts_asset import TtsAsset
 from app.models.user import User
 from app.services.ai_config import ai_api_key, get_ai_config
-from app.services.dictionary import DictionaryServiceError, delete_dictionary_history, dictionary_history, lookup_dictionary
+from app.services.dictionary import DictionaryServiceError, delete_dictionary_history, detect_direction, dictionary_history, lookup_dictionary, store_dictionary_result
+from app.services.local_dictionary import LocalDictionary
 from app.services.openai_chat import OpenAiChatClient, OpenAiChatError
 from app.workers.tts import generate_configured_tts
 from app.workers.voice import generate_text_with_voice
@@ -48,9 +51,25 @@ def _current_child(session: DbSession) -> Child:
 
 @router.post('/dictionary/lookup')
 def lookup(payload: DictionaryLookupRequest, session: DbSession, user: Annotated[User, Depends(require_user)]) -> dict:
+    source, target = detect_direction(payload.text) if payload.source_language == 'auto' else (payload.source_language, 'en' if payload.source_language == 'zh' else 'zh')
+    normalized = payload.text.strip()
+    local_eligible = bool(re.fullmatch(r"[A-Za-z][A-Za-z'’-]*", normalized)) if source == 'en' else bool(re.fullmatch(r'[\u3400-\u9fff]{1,12}', normalized))
+    local_dictionary = LocalDictionary(get_settings().local_dictionary_path)
+    if local_eligible:
+        local = local_dictionary.lookup(normalized, source)
+        if local is not None:
+            attribution = 'ECDICT (MIT)' if local.source == 'ecdict' else 'CC-CEDICT (CC BY-SA 3.0)'
+            result = local.result.model_copy(update={'result_source': local.source, 'source_attribution': attribution})
+            found = store_dictionary_result(
+                session, _current_child(session).id, normalized, source, target, local_dictionary.fingerprint,
+                result, prompt_version='local-v1', owner_user_id=user.id,
+            )
+            return {**found.result.model_dump(), 'cache_hit': found.cache_hit, 'entry_id': found.entry_id}
     config = get_ai_config(session)
     if config is None or not config.enabled or not config.api_key_encrypted:
-        raise HTTPException(409, detail={'code': 'AI_NOT_CONFIGURED', 'message': 'Dictionary AI is not configured'})
+        code = 'DICTIONARY_LOCAL_MISS' if local_eligible else 'DICTIONARY_AI_REQUIRED'
+        message = '本地词典没有找到这个词；配置 AI 后可继续查询。' if local_eligible else '短语和句子查询需要先配置辞典 AI。'
+        raise HTTPException(409, detail={'code': code, 'message': message})
     client = OpenAiChatClient(ai_api_key(config), config.base_url, config.model, config.timeout_seconds)
     client.fingerprint = f'{config.protocol}:{config.base_url}:{config.model}:{config.temperature}'
     try:

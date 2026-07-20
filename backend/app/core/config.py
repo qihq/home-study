@@ -16,6 +16,7 @@ class Settings(BaseSettings):
     mimo_tts_model: str | None = 'mimo-v2.5-tts'
     mimo_tts_voice: str | None = 'Chloe'
     mimo_tts_speed: float = 1.0
+    local_dictionary_path: Path = Path('/app/dictionary/local-dictionary.sqlite3')
 
     @property
     def uploads_dir(self) -> Path:

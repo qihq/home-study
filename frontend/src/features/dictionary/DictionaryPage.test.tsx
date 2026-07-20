@@ -73,3 +73,18 @@ it('can force pronunciation regeneration while preserving the selected voice', a
   expect(onPlay).toHaveBeenCalledWith('entry-apple', 'voice-1', true)
   expect(screen.getByRole('status')).toHaveTextContent('新发音已生成并播放')
 })
+
+it('shows local dictionary provenance instead of an AI disclaimer', async () => {
+  const user = userEvent.setup()
+  render(<DictionaryPage onLookup={vi.fn().mockResolvedValue({
+    entry_id: 'local-apple', source_language: 'en', target_language: 'zh', item_type: 'word', source_text: 'apple',
+    primary_translation: '苹果', phonetic: "'æpl'", parts_of_speech: [], alternatives: [], examples: [], usage_note: null,
+    cache_hit: false, result_source: 'ecdict', source_attribution: 'ECDICT (MIT)',
+  })} onMarkUnknown={vi.fn()} />)
+
+  await user.type(screen.getByLabelText('查询内容'), 'apple')
+  await user.click(screen.getByRole('button', { name: '查询' }))
+
+  expect(screen.getByText('本地词典 · ECDICT')).toBeVisible()
+  expect(screen.queryByText('AI 生成，请家长核对')).not.toBeInTheDocument()
+})

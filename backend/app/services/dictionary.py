@@ -69,6 +69,26 @@ def _add_history(session, child_id: str, entry: DictionaryEntry, owner_user_id: 
         session.add(DictionaryHistory(child_id=child_id, entry_id=entry.id, owner_user_id=owner_user_id))
 
 
+def store_dictionary_result(
+    session, child_id: str, text: str, source: str, target: str, fingerprint: str, result: DictionaryResult,
+    *, prompt_version: str, owner_user_id: str | None = None,
+) -> DictionaryLookup:
+    query_hash = _query_hash(text, source, target, fingerprint, prompt_version)
+    entry = session.scalar(select(DictionaryEntry).where(DictionaryEntry.query_hash == query_hash))
+    if entry is not None:
+        entry.last_accessed_at = datetime.now(timezone.utc)
+        entry.hit_count += 1
+        _add_history(session, child_id, entry, owner_user_id)
+        session.commit()
+        return DictionaryLookup(result=DictionaryResult.model_validate_json(entry.result_json), cache_hit=True, entry_id=entry.id)
+    entry = DictionaryEntry(query_hash=query_hash, result_json=result.model_dump_json())
+    session.add(entry)
+    session.flush()
+    _add_history(session, child_id, entry, owner_user_id)
+    session.commit()
+    return DictionaryLookup(result=result, entry_id=entry.id)
+
+
 def lookup_dictionary(
     session, child_id: str, text: str, source_language: str, ai, *, prompt_version: str, owner_user_id: str | None = None,
 ) -> DictionaryLookup:

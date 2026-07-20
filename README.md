@@ -86,6 +86,7 @@ All settings are configured via environment variables (prefix `APP_`):
 | `APP_ENVIRONMENT` | `production` | Environment name |
 | `APP_MIMO_API_KEY` | — | MiMo TTS API key (set in Settings page) |
 | `APP_MIMO_API_BASE_URL` | `https://api.xiaomimimo.com/v1` | MiMo API endpoint |
+| `APP_LOCAL_DICTIONARY_PATH` | `/app/dictionary/local-dictionary.sqlite3` | Read-only ECDICT + CC-CEDICT SQLite database |
 
 TTS and AI settings are configured through the web UI Settings page after first login.
 
@@ -117,5 +118,7 @@ family-learning/
 ## License / 许可
 
 UI assets from [Animal Island UI](https://github.com/guokaigdg/animal-island-ui) — [CC BY-NC 4.0](https://creativecommons.org/licenses/by-nc/4.0/).
+
+Dictionary data uses [ECDICT](https://github.com/skywind3000/ECDICT) under the MIT License and [CC-CEDICT](https://cc-cedict.org/wiki/) under [CC BY-SA 3.0](https://creativecommons.org/licenses/by-sa/3.0/). English and Chinese word lookup uses the bundled local database first; phrases, sentences, and local misses fall back to the configured AI provider.
 
 其余部分保留所有权利。

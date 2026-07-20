@@ -1,6 +1,26 @@
 from fastapi.testclient import TestClient
 
 
+def _install_local_dictionary(monkeypatch, tmp_path) -> None:
+    import sqlite3
+    from app.core.config import get_settings
+
+    path = tmp_path / 'local-dictionary.sqlite3'
+    connection = sqlite3.connect(path)
+    connection.executescript("""
+        CREATE TABLE metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+        CREATE TABLE ecdict (word TEXT PRIMARY KEY, phonetic TEXT, translation TEXT, definition TEXT, pos TEXT);
+        CREATE TABLE ecdict_aliases (alias TEXT PRIMARY KEY, word TEXT NOT NULL);
+        CREATE TABLE cedict (simplified TEXT, traditional TEXT, pinyin TEXT, definitions TEXT);
+        INSERT INTO metadata VALUES ('version', 'api-fixture-v1');
+        INSERT INTO ecdict VALUES ('apple', '''æpl''', 'n. 苹果', 'a round fruit', 'n:100');
+        INSERT INTO cedict VALUES ('苹果', '蘋果', 'ping2 guo3', 'apple/fruit');
+    """)
+    connection.commit(); connection.close()
+    monkeypatch.setenv('APP_LOCAL_DICTIONARY_PATH', str(path))
+    get_settings.cache_clear()
+
+
 def test_dictionary_audio_returns_authenticated_asset_for_a_ready_selected_voice(client: TestClient, admin_user, monkeypatch, tmp_path) -> None:
     from app.db.session import get_session_factory
     from app.models.dictionary import DictionaryEntry
@@ -159,6 +179,37 @@ def test_dictionary_lookup_honors_auto_and_manual_direction(client: TestClient, 
     assert response.json()['target_language'] == 'en'
     assert response.json()['cache_hit'] is False
     assert response.json()['entry_id']
+
+
+def test_local_english_and_chinese_words_work_without_ai_configuration(client: TestClient, admin_user, monkeypatch, tmp_path) -> None:
+    _install_local_dictionary(monkeypatch, tmp_path)
+    login = client.post('/api/auth/login', json={'username': 'parent', 'password': 'correct horse'})
+    headers = {'Cookie': login.headers['set-cookie'].split(';', 1)[0]}
+
+    english = client.post('/api/dictionary/lookup', json={'text': 'apple'}, headers=headers)
+    chinese = client.post('/api/dictionary/lookup', json={'text': '苹果'}, headers=headers)
+    repeated = client.post('/api/dictionary/lookup', json={'text': 'Apple'}, headers=headers)
+
+    assert english.status_code == chinese.status_code == repeated.status_code == 200
+    assert english.json()['primary_translation'] == 'n. 苹果'
+    assert english.json()['result_source'] == 'ecdict'
+    assert english.json()['source_attribution'] == 'ECDICT (MIT)'
+    assert chinese.json()['primary_translation'] == 'apple'
+    assert chinese.json()['result_source'] == 'cc-cedict'
+    assert repeated.json()['cache_hit'] is True
+
+
+def test_local_miss_without_ai_returns_specific_word_or_sentence_error(client: TestClient, admin_user, monkeypatch, tmp_path) -> None:
+    _install_local_dictionary(monkeypatch, tmp_path)
+    login = client.post('/api/auth/login', json={'username': 'parent', 'password': 'correct horse'})
+    headers = {'Cookie': login.headers['set-cookie'].split(';', 1)[0]}
+
+    word = client.post('/api/dictionary/lookup', json={'text': 'kumquat'}, headers=headers)
+    sentence = client.post('/api/dictionary/lookup', json={'text': 'I like apples.'}, headers=headers)
+
+    assert word.status_code == sentence.status_code == 409
+    assert word.json()['detail']['code'] == 'DICTIONARY_LOCAL_MISS'
+    assert sentence.json()['detail']['code'] == 'DICTIONARY_AI_REQUIRED'
 
 
 def test_dictionary_history_is_child_scoped_and_deletable(client: TestClient, admin_user, monkeypatch) -> None:

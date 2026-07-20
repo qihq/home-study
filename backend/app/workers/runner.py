@@ -24,8 +24,15 @@ def repair_pending_work(session: Session) -> None:
     from app.services.learning_items import enqueue_missing_tts_for_confirmed_items
 
     for recording in session.scalars(select(Recording).where(Recording.status == 'transcode_failed', Recording.source_path.is_not(None))):
-        recording.status = 'transcoding'
-        enqueue_once(session, 'transcode_video', recording.id)
+        latest = session.scalar(select(Job).where(Job.type == 'transcode_video', Job.entity_id == recording.id).order_by(Job.created_at.desc()))
+        if latest is None or latest.attempts < latest.max_attempts:
+            recording.status = 'transcoding'
+            if latest is not None and latest.status == 'failed':
+                latest.status = 'queued'
+                latest.error_code = None
+                latest.error_detail = None
+            else:
+                enqueue_once(session, 'transcode_video', recording.id)
     for recording in session.scalars(select(Recording).where(Recording.status == 'assembling')):
         enqueue_once(session, 'assemble_video', recording.id)
     for recording in session.scalars(select(Recording).where(Recording.status == 'transcoding', Recording.source_path.is_not(None))):
@@ -139,6 +146,8 @@ def main() -> None:
             with get_session_factory()() as session:
                 processed = run_once(session, worker_id)
             if not processed:
+                with get_session_factory()() as session:
+                    repair_pending_work(session)
                 time.sleep(2)
         except Exception:
             traceback.print_exc()

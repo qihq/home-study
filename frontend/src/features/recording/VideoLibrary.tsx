@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { RecordingCalendar } from './RecordingCalendar'
 
 export type RecordingItem = {
@@ -51,7 +51,14 @@ type Props = {
 export function VideoLibrary({ recordings, loading = false, loadError = null, onRetry, workerOnline = true, onMakeOfficial, onDelete, onRename, onRetryProcessing }: Props) {
   const [previewId, setPreviewId] = useState<string | null>(null)
   const [selectedDate, setSelectedDate] = useState<string | null>(() => recordings.map(item => item.reading_date).sort().at(-1) ?? null)
+  const dateInitialized = useRef(recordings.length > 0)
   const visibleRecordings = useMemo(() => selectedDate ? recordings.filter(item => item.reading_date === selectedDate) : recordings, [recordings, selectedDate])
+  useEffect(() => {
+    if (!dateInitialized.current && recordings.length > 0) {
+      dateInitialized.current = true
+      setSelectedDate(recordings.map(item => item.reading_date).sort().at(-1) ?? null)
+    }
+  }, [recordings])
   useEffect(() => {
     if (previewId && !visibleRecordings.some(item => item.id === previewId)) setPreviewId(null)
   }, [previewId, visibleRecordings])

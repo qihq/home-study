@@ -76,3 +76,14 @@ it('offers manual processing retry only for exhausted video failures', async () 
   await user.click(screen.getByRole('button', { name: '重新处理' }))
   expect(retry).toHaveBeenCalledWith('failed')
 })
+
+it('selects the newest date when recordings arrive after the loading state', () => {
+  const { rerender } = render(<VideoLibrary recordings={[]} loading />)
+  rerender(<VideoLibrary recordings={[
+    { id: 'older', reading_date: '2026-07-12', language_type: 'chinese', title: '较早视频', status: 'ready', is_official: true, duration_ms: 60000, download_ready: true },
+    { id: 'newer', reading_date: '2026-07-13', language_type: 'english', title: '最新视频', status: 'ready', is_official: true, duration_ms: 60000, download_ready: true },
+  ]} />)
+
+  expect(screen.getByText('最新视频')).toBeVisible()
+  expect(screen.queryByText('较早视频')).not.toBeInTheDocument()
+})

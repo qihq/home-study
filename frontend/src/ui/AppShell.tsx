@@ -107,6 +107,8 @@ export function AppShell({
           界面素材来自 Animal Island UI
           <br />
           CC BY-NC 4.0
+          <br />
+          词典：ECDICT (MIT) / CC-CEDICT (CC BY-SA 3.0)
         </p>
       </aside>
       <header className="tablet-header">

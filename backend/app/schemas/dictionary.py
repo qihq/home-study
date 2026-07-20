@@ -24,3 +24,5 @@ class DictionaryResult(BaseModel):
     alternatives: list[str] = Field(max_length=3)
     examples: list[DictionaryExample] = Field(max_length=3)
     usage_note: str | None
+    result_source: Literal['ecdict', 'cc-cedict', 'ai'] = 'ai'
+    source_attribution: str | None = None

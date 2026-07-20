@@ -34,6 +34,8 @@
 
 @media(max-width:460px){.island-hero{min-height:245px;align-items:flex-start}.island-hero>div{max-width:78%}.island-hero img{right:-72px;width:205px}.task-card,.recovery-card,.dictation-card{align-items:stretch;flex-direction:column}.task-card .button,.recovery-card .button,.dictation-card .button{width:100%}.overview{grid-template-columns:1fr}.dictation-navigation>.button{flex:1}.pronunciation-controls>.button{width:100%}.calendar{gap:3px}.calendar-day{padding:5px;min-height:48px}.mobile-menu-grid{grid-template-columns:1fr}}
 
+.dictionary-source{display:inline-flex;margin-bottom:6px;padding:5px 10px;border-radius:999px;background:#e1f4ed;color:#34796f!important;font-size:12px;font-weight:900}
+
 @media(prefers-reduced-motion:reduce){*,*::before,*::after{scroll-behavior:auto!important;transition:none!important;animation:none!important}}
 
 @media(max-width:460px){.island-hero>div{max-width:74%}.island-hero img{right:-42px;width:180px}}
