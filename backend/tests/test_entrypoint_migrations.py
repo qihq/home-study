@@ -73,3 +73,18 @@ def test_docker_python_index_is_configurable_for_reliable_builds() -> None:
 
     assert 'ARG PIP_INDEX_URL=' in content
     assert 'ENV PIP_INDEX_URL=${PIP_INDEX_URL}' in content
+
+
+def test_docker_build_context_keeps_only_the_local_dictionary_database() -> None:
+    content = (Path(__file__).parents[2] / '.dockerignore').read_text(encoding='utf-8')
+
+    assert 'backend/dictionary-data/*' in content
+    assert '!backend/dictionary-data/local-dictionary.sqlite3' in content
+    assert 'backend/dictionary-data/\n' not in content
+    assert 'frontend/dist\n' not in content
+
+
+def test_release_local_image_keeps_the_local_dictionary_at_runtime_path() -> None:
+    content = (Path(__file__).parents[2] / 'deploy' / 'Dockerfile.release-local').read_text(encoding='utf-8')
+
+    assert 'cp /app/backend/dictionary-data/local-dictionary.sqlite3 /app/dictionary/local-dictionary.sqlite3' in content

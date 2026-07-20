@@ -2,6 +2,7 @@ FROM family-learning:latest
 WORKDIR /app
 COPY backend ./backend
 COPY backend/app ./app
+RUN mkdir -p /app/dictionary && cp /app/backend/dictionary-data/local-dictionary.sqlite3 /app/dictionary/local-dictionary.sqlite3
 COPY deploy/entrypoint.sh /entrypoint.sh
 COPY frontend/dist /app/frontend-dist
 RUN chmod +x /entrypoint.sh

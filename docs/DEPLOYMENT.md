@@ -56,11 +56,49 @@ docker compose up -d
 
 声音克隆预览使用 MiMo 声音克隆接口，仍依赖部署时提供的 MiMo 环境变量 API Key；仅保存设置页的 TTS 配置并不能替代该运行时配置。
 
+## 本地辞典数据
+
+常用英文单词优先查询 ECDICT，中文词条优先查询 CC-CEDICT；短语、句子和本地未命中才调用 AI。因此，AI 未配置或外网临时不可用时，本地词条仍可查询。
+
+构建镜像前在 Windows PowerShell 执行：
+
+```powershell
+backend/scripts/download_local_dictionary.ps1
+```
+
+脚本将 ECDICT 固定到提交 `bc015ed2e24a7abef49fc6dbbb7fe32c1dadaf8b`，下载 CC-CEDICT 发布包，并在 `backend/dictionary-data/` 生成只读 SQLite 与 `SHA256SUMS`。2026-07-20 验证的文件校验值为：
+
+```text
+1a6947e04785db63613a92e14903cdae7954f7e84860b10e68e5c7cbb3f9c3cf  ecdict.csv
+ca51533573f692a0591b4be251cf65dda46ec987d525af2535677f409ded50f3  cedict_1_0_ts_utf-8_mdbg.txt.gz
+2309ff5afd9fc5fde65144c770f8d7a3403742a62498075715592a673d592328  local-dictionary.sqlite3
+```
+
+源数据与 SQLite 不提交到 Git。Docker 构建缺少 `local-dictionary.sqlite3` 时会明确失败，避免误发布为只依赖 AI 的辞典。容器默认从 `/app/dictionary/local-dictionary.sqlite3` 只读查询；本地后端开发可设置 `APP_LOCAL_DICTIONARY_PATH` 指向生成文件。
+
+ECDICT 使用 MIT License；CC-CEDICT 使用 CC BY-SA 3.0。应用侧边栏和 `frontend/public/animal-island/ATTRIBUTION.txt` 保留署名与许可证说明。
+
+Dockerfile 默认使用当前网络可达的清华 PyPI 镜像，并把超时和重试应用到全部 pip 下载。若部署网络要求官方或内部镜像，可覆盖构建参数：
+
+```sh
+docker build --build-arg PIP_INDEX_URL=https://pypi.org/simple -f deploy/Dockerfile -t family-learning:local .
+```
+
 ## 视频转码
 
 系统默认使用软件 H.264 转码。DS918+ 上如果确认 `/dev/dri` 可用，可在单容器服务添加对应设备映射，将硬件转码作为后续优化；不得因为硬件编码不可用阻止源视频保存。
 
+当前压缩版使用 H.264 Main Profile、AAC 80 kbps、CRF 27 和 900 kbps 峰值码率，并限制最长边不超过 720p、禁止放大低分辨率源视频。输出固定为 `yuv420p`、TV range、BT.709，并写入 fast-start 索引和约 2 秒关键帧间隔，以兼顾 iPhone/iPad Safari 播放、拖动预览和 NAS 存储体积。
+
+预览与下载必须继续使用框架原生 `FileResponse`。生产环境的 Starlette 会原生处理 HTTP Range 并返回 `206 Partial Content`；不要再包一层自定义 Range 响应，否则 Safari 可能只播放声音或无法拖动。视频库只在用户展开某一条记录时创建播放器，`preload="metadata"` 避免列表页加载完整视频。下载响应应保持 `video/mp4`，并通过 `Content-Disposition` 提供 `.mp4` 文件名。
+
+替换历史压缩文件时，先在同目录生成候选文件并校验视频流、音频流、时长、关键帧和浏览器画面，再原子替换 `720p.mp4`。保留替换前文件作为带日期的备份。不要通过 SMB 直接修改正在运行的 SQLite（尤其是 WAL 模式下的 `app.db`、`app.db-wal`、`app.db-shm`）；如确需数据库维护，应先停止容器并使用 SQLite 自身的备份/事务流程。
+
 压缩版完成后，在 iPhone/iPad 点击下载，并通过系统分享菜单选择“存储视频”。网页不能静默写入照片相册。
+
+Worker 在 FFmpeg 长任务期间每 5 秒刷新心跳与任务租约，因此“处理中”不会再被误报为离线，也不会因超过租约而被另一 Worker 重复领取。可恢复的组装/转码错误会按有限次数自动退避重试；启动时和 Worker 空闲期间会补齐 `assembling`、`transcoding` 但缺少任务的录像。
+
+视频库每 5 秒后台刷新仍在处理的录像。只有自动重试耗尽后才显示“处理失败”和“重新处理”；该操作会复用已验证的源视频继续转码，或重新组装仍保留完整分片的录像，不需要重启后端或容器。健康接口同时返回兼容字段 `worker` 以及 `worker_state`（`online`、`busy`、`offline`）。
 
 ## 已知限制
 
