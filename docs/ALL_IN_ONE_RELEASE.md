@@ -15,11 +15,11 @@ npm --prefix frontend test -- --run
 npm --prefix frontend run build
 
 VERSION=v0.2.0
-TAG=family-learning:0.2.0
+TAG=family-learning:latest
 OUT=dist/ds918plus-$VERSION
 mkdir -p "$OUT"
 
-docker buildx build --platform linux/amd64 --load -t "$TAG" -t family-learning:latest -f deploy/Dockerfile .
+docker buildx build --platform linux/amd64 --load -t "$TAG" -f deploy/Dockerfile .
 docker save -o "$OUT/family-learning-ds918plus-amd64-$VERSION.tar" "$TAG"
 sha256sum "$OUT/family-learning-ds918plus-amd64-$VERSION.tar" > "$OUT/family-learning-ds918plus-amd64-$VERSION.tar.sha256"
 ```
@@ -32,7 +32,7 @@ Create `$OUT/compose.yaml`, replacing the image tag with the newly built tag:
 name: family-learning
 services:
   family-learning:
-    image: family-learning:0.2.0
+    image: family-learning:latest
     command: ["single"]
     environment:
       APP_DATA_DIR: /data

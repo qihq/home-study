@@ -19,8 +19,8 @@ A family-learning PWA for Synology NAS. It supports Chinese and English reading 
 
 ```powershell
 backend/scripts/download_local_dictionary.ps1
-docker buildx build --platform linux/amd64 --load -t family-learning:0.2.0 -t family-learning:latest -f deploy/Dockerfile .
-docker save -o family-learning-ds918plus-amd64-v0.2.0.tar family-learning:0.2.0
+docker buildx build --platform linux/amd64 --load -t family-learning:latest -f deploy/Dockerfile .
+docker save -o family-learning-ds918plus-amd64-v0.2.0.tar family-learning:latest
 Get-FileHash family-learning-ds918plus-amd64-v0.2.0.tar -Algorithm SHA256
 ```
 
