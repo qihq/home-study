@@ -3,6 +3,10 @@ import userEvent from '@testing-library/user-event'
 import { vi } from 'vitest'
 import { downloadVideo, VideoDownloadPage, VideoDownloadItem } from './VideoDownloadPage'
 
+afterEach(() => {
+  Object.defineProperty(window, 'matchMedia', { configurable: true, value: undefined })
+})
+
 const item: VideoDownloadItem = {
   id: 'recording-1',
   title: '周一英文阅读',
@@ -41,8 +45,9 @@ it('reports real byte progress while streaming the authenticated video', async (
   expect(file).toMatchObject({ name: item.fileName, type: 'video/mp4', size: 4 })
 })
 
-it('shares the completed video and returns home after the system sheet succeeds', async () => {
+it('does not auto-open the system share sheet on desktop after download completes', async () => {
   const share = vi.fn().mockResolvedValue(undefined)
+  Object.defineProperty(window, 'matchMedia', { configurable: true, value: vi.fn(() => ({ matches: true })) })
   Object.defineProperty(navigator, 'canShare', { configurable: true, value: vi.fn(() => true) })
   Object.defineProperty(navigator, 'share', { configurable: true, value: share })
   vi.stubGlobal('fetch', vi.fn().mockResolvedValue(streamedResponse([new Uint8Array([1, 2, 3])])))
@@ -51,8 +56,9 @@ it('shares the completed video and returns home after the system sheet succeeds'
   render(<VideoDownloadPage item={item} onHome={onHome} onBackToVideos={vi.fn()} />)
 
   expect(await screen.findByRole('heading', { name: '正在保存阅读回忆' })).toBeVisible()
-  await waitFor(() => expect(share).toHaveBeenCalledWith(expect.objectContaining({ files: [expect.any(File)] })))
-  await waitFor(() => expect(onHome).toHaveBeenCalledOnce())
+  expect(await screen.findByRole('button', { name: '分享视频' })).toBeVisible()
+  expect(share).not.toHaveBeenCalled()
+  expect(onHome).not.toHaveBeenCalled()
 })
 
 it('stays on the page when sharing is cancelled and allows another save attempt', async () => {

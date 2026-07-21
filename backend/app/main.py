@@ -22,7 +22,7 @@ from app.core.config import get_settings
 
 
 def create_app() -> FastAPI:
-    app = FastAPI(title='Family Learning API', version='0.1.0')
+    app = FastAPI(title='Family Learning API', version='0.2.1')
     Base.metadata.create_all(get_engine())
     app.include_router(health_router, prefix='/api')
     app.include_router(auth_router, prefix='/api')

@@ -1,4 +1,5 @@
 from typing import Annotated, Literal
+from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
@@ -27,6 +28,7 @@ class UnknownItemStatus(BaseModel):
 
 class UnknownItemSelection(BaseModel):
     unknown_item_ids: list[str]
+    title: str | None = None
 
 
 @router.post('/dictionary/entries/{entry_id}/mark-unknown')
@@ -72,7 +74,13 @@ def delete(unknown_id: str, session: DbSession, _user: Annotated[User, Depends(r
 @router.post('/learning-lists/from-unknown-items', status_code=201)
 def create_learning_list(payload: UnknownItemSelection, session: DbSession, _user: Annotated[User, Depends(require_user)]) -> dict:
     try:
-        learning_list = create_learning_list_from_unknown_items(session, _current_child(session).id, payload.unknown_item_ids)
+        title = payload.title.strip() if payload.title else ''
+        learning_list = create_learning_list_from_unknown_items(
+            session,
+            _current_child(session).id,
+            payload.unknown_item_ids,
+            title or f'生词复习 · {datetime.now().strftime("%m/%d")}',
+        )
     except ValueError as error:
         raise HTTPException(422, detail={'code': str(error), 'message': '未选择生词'}) from error
-    return {'id': learning_list.id, 'status': learning_list.status}
+    return {'id': learning_list.id, 'title': learning_list.title, 'status': learning_list.status}

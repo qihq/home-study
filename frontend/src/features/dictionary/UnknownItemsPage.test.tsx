@@ -29,8 +29,8 @@ it('filters unknown items, changes mastery, and creates a learning list from sel
   expect(onUpdateStatus).toHaveBeenCalledWith('unknown-2', 'unknown')
 
   await user.click(screen.getByLabelText('选择 apple'))
-  await user.click(screen.getByRole('button', { name: '创建学习列表（1）' }))
-  expect(onCreateLearningList).toHaveBeenCalledWith(['unknown-1'])
+  await user.click(screen.getByRole('button', { name: '生成学习本（1）' }))
+  expect(onCreateLearningList).toHaveBeenCalledWith(['unknown-1'], expect.stringMatching(/^生词复习/))
 })
 
 it('deletes an unknown item after confirmation and refreshes the list', async () => {
@@ -45,4 +45,23 @@ it('deletes an unknown item after confirmation and refreshes the list', async ()
   expect(onDelete).toHaveBeenCalledWith('unknown-1')
   expect(onLoad).toHaveBeenCalledTimes(1)
   expect(screen.queryByText('apple')).not.toBeInTheDocument()
+})
+
+it('opens the generated learning-book tab after creating a list from unknown items', async () => {
+  const user = userEvent.setup()
+  const onLoadLearningLists = vi.fn().mockResolvedValue([
+    { id: 'list-1', title: '七月生词', status: 'draft', created_at: '2026-07-21T09:00:00Z', items: [{ display_text: 'apple', item_type: 'word', translation_text: '苹果' }] },
+  ])
+  const onCreateLearningList = vi.fn().mockResolvedValue({ id: 'list-1', status: 'draft' })
+  render(<UnknownItemsPage onLoad={vi.fn().mockResolvedValue([unknownItems[0]])} onUpdateStatus={vi.fn()} onCreateLearningList={onCreateLearningList} onLoadLearningLists={onLoadLearningLists} />)
+
+  await user.click(await screen.findByLabelText('选择 apple'))
+  await user.clear(screen.getByLabelText('学习本名称'))
+  await user.type(screen.getByLabelText('学习本名称'), '七月生词')
+  await user.click(screen.getByRole('button', { name: '生成学习本（1）' }))
+
+  expect(onCreateLearningList).toHaveBeenCalledWith(['unknown-1'], '七月生词')
+  expect(await screen.findByRole('tab', { name: '生成的学习本' })).toHaveAttribute('aria-selected', 'true')
+  expect(screen.getByRole('tab', { name: /七月生词/ })).toBeVisible()
+  expect(screen.getByText('苹果')).toBeVisible()
 })

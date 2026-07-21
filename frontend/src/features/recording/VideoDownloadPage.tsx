@@ -12,6 +12,10 @@ export type VideoDownloadItem = {
 type DownloadState = 'downloading' | 'ready' | 'sharing' | 'cancelled' | 'error'
 type Fetcher = typeof fetch
 
+function isDesktopPointer() {
+  return typeof window !== 'undefined' && window.matchMedia?.('(hover: hover) and (pointer: fine)').matches === true
+}
+
 export async function downloadVideo(
   item: VideoDownloadItem,
   signal: AbortSignal,
@@ -103,8 +107,12 @@ export function VideoDownloadPage({ item, onHome, onBackToVideos }: {
       if (current.signal.aborted) return
       setFile(video)
       setState('ready')
-      setMessage('下载完成，正在打开系统照片存储面板。')
-      void shareFile(video)
+      if (isDesktopPointer()) {
+        setMessage('下载完成。请选择保存 MP4 或分享视频。')
+      } else {
+        setMessage('下载完成，正在打开系统照片存储面板。')
+        void shareFile(video)
+      }
     }).catch(error => {
       if (current.signal.aborted) return
       setState('error')
@@ -129,7 +137,7 @@ export function VideoDownloadPage({ item, onHome, onBackToVideos }: {
       <div><p className="date">小岛快递站</p><h1>正在保存阅读回忆</h1><p>{item.title}</p></div>
       <img src="/animal-island/shopping.svg" alt="" />
     </header>
-    <article className="video-download-card">
+    <article className={`video-download-card ${state === 'ready' || state === 'sharing' ? 'is-ready' : ''}`}>
       <img className="video-download-companion" src="/animal-island/animal-icon.png" alt="小岛伙伴正在打包视频" />
       <div className="video-download-details">
         <p className="video-download-language">{item.languageType === 'chinese' ? '中文阅读' : '英文阅读'} · {item.readingDate}</p>
@@ -142,10 +150,11 @@ export function VideoDownloadPage({ item, onHome, onBackToVideos }: {
         <div className="video-download-primary-actions">
           {state === 'downloading' && <Button variant="secondary" onClick={cancel}>取消下载</Button>}
           {(state === 'error' || state === 'cancelled') && <Button onClick={() => setAttempt(value => value + 1)}>重新下载</Button>}
-          {file && state === 'ready' && navigator.canShare?.({ files: [file] }) && <Button onClick={() => void shareFile(file)}>保存到照片</Button>}
-          {file && state === 'ready' && !navigator.canShare?.({ files: [file] }) && fallbackUrl && <a className="button button--primary" href={fallbackUrl} download={item.fileName} target="_blank" rel="noreferrer">保存 MP4</a>}
+          {file && state === 'ready' && navigator.canShare?.({ files: [file] }) && <Button onClick={() => void shareFile(file)}>{isDesktopPointer() ? '分享视频' : '保存到照片'}</Button>}
+          {file && state === 'ready' && fallbackUrl && <a className="button button--secondary" href={fallbackUrl} download={item.fileName} target="_blank" rel="noreferrer">保存 MP4</a>}
         </div>
       </div>
+      {state === 'sharing' && <div className="video-download-share-mask" role="status">请在系统窗口中完成分享</div>}
     </article>
     <div className="video-download-navigation">
       <Button variant="secondary" onClick={onBackToVideos}>返回视频库</Button>

@@ -1,6 +1,6 @@
 from typing import Annotated, Literal
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 
@@ -72,15 +72,24 @@ async def recognize_image(
 
 
 @router.get('/word-lists')
-def list_word_lists(session: DbSession, _user: Annotated[User, Depends(require_user)]) -> list[dict]:
-    lists = session.scalars(select(WordList).where(WordList.status != 'archived').order_by(WordList.created_at.desc())).all()
+def list_word_lists(
+    session: DbSession,
+    _user: Annotated[User, Depends(require_user)],
+    source_type: str | None = Query(default=None),
+) -> list[dict]:
+    statement = select(WordList).where(WordList.status != 'archived')
+    if source_type:
+        statement = statement.where(WordList.source_type == source_type)
+    lists = session.scalars(statement.order_by(WordList.created_at.desc())).all()
     result = []
     for word_list in lists:
-        version = session.scalar(select(WordListVersion).where(WordListVersion.word_list_id == word_list.id, WordListVersion.version == word_list.current_version)) if word_list.current_version else None
+        version_number = word_list.current_version if word_list.current_version is not None else 0
+        version = session.scalar(select(WordListVersion).where(WordListVersion.word_list_id == word_list.id, WordListVersion.version == version_number))
         items = session.scalars(select(WordItem).where(WordItem.word_list_version_id == version.id).order_by(WordItem.position)).all() if version else []
         result.append({
             'id': word_list.id, 'title': word_list.title, 'status': word_list.status,
             'source_type': word_list.source_type, 'word_list_version_id': version.id if version else None,
+            'created_at': word_list.created_at.isoformat(),
             'items': [item.display_text for item in items],
             'item_details': [
                 {'id': item.id, 'display_text': item.display_text, 'pronunciation_source': item.pronunciation_source,

@@ -44,13 +44,15 @@ def test_unknown_items_create_mixed_learning_list_without_changing_status(sessio
         'target_language': 'zh', 'translation_text': '我喜欢苹果。',
     })
 
-    learning_list = create_learning_list_from_unknown_items(session, child.id, [word.id, sentence.id])
+    learning_list = create_learning_list_from_unknown_items(session, child.id, [word.id, sentence.id], '七月生词')
     version = confirm_learning_list(session, learning_list.id)
 
     assert [(item.item_type, item.translation_text) for item in version.items] == [
         ('word', '苹果'), ('sentence', '我喜欢苹果。'),
     ]
     assert [session.get(type(word), item_id).status for item_id in (word.id, sentence.id)] == ['unknown', 'unknown']
+    assert learning_list.title == '七月生词'
+    assert learning_list.source_type == 'unknown_items'
 
 
 def test_unknown_item_can_be_permanently_deleted(session) -> None:

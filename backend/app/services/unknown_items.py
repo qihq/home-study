@@ -82,7 +82,7 @@ def list_unknown_items(session: Session, child_id: str, status: str | None = Non
     return list(session.scalars(statement.order_by(UnknownItem.marked_at.desc())))
 
 
-def create_learning_list_from_unknown_items(session: Session, child_id: str, unknown_ids: list[str]):
+def create_learning_list_from_unknown_items(session: Session, child_id: str, unknown_ids: list[str], title: str = '生词复习'):
     items_by_id = {
         item.id: item for item in session.scalars(select(UnknownItem).where(
             UnknownItem.child_id == child_id,
@@ -92,7 +92,7 @@ def create_learning_list_from_unknown_items(session: Session, child_id: str, unk
     selected = [items_by_id[item_id] for item_id in unknown_ids if item_id in items_by_id]
     if not selected:
         raise ValueError('NO_UNKNOWN_ITEMS_SELECTED')
-    return create_learning_list(session, child_id, '生词复习', [
+    learning_list = create_learning_list(session, child_id, title, [
         {
             'display_text': item.source_text,
             'item_type': item.item_type,
@@ -102,3 +102,7 @@ def create_learning_list_from_unknown_items(session: Session, child_id: str, unk
         }
         for item in selected
     ])
+    learning_list.source_type = 'unknown_items'
+    session.commit()
+    session.refresh(learning_list)
+    return learning_list

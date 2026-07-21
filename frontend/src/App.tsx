@@ -184,7 +184,7 @@ export function App() {
   if (screen === "dictionary")
     return <DictionaryScreen onNavigate={navigate} />;
   if (screen === "unknown-items")
-    return <UnknownItemsScreen onNavigate={navigate} />;
+    return <UnknownItemsScreen onNavigate={navigate} onStartDictation={(items, versionId) => { setWords(items); setWordListVersionId(versionId); setScreen("dictation"); }} />;
   if (screen === "voices") return <VoicesScreen onNavigate={navigate} />;
   if (screen === "stats") return <StatsScreen onNavigate={navigate} />;
   if (screen === "videos") return <VideosScreen onNavigate={navigate} onDownload={(item) => { setVideoDownload(item); setScreen("download") }} />;
@@ -399,8 +399,10 @@ function DictionaryScreen({
 
 function UnknownItemsScreen({
   onNavigate,
+  onStartDictation,
 }: {
   onNavigate: (item: string) => void;
+  onStartDictation: (items: string[], versionId: string) => void;
 }) {
   const load = ({
     status,
@@ -423,12 +425,18 @@ function UnknownItemsScreen({
             body: JSON.stringify({ status }),
           })
         }
-        onCreateLearningList={(unknown_item_ids) =>
+        onCreateLearningList={(unknown_item_ids, title) =>
           api("/learning-lists/from-unknown-items", {
             method: "POST",
-            body: JSON.stringify({ unknown_item_ids }),
+            body: JSON.stringify({ unknown_item_ids, title }),
           })
         }
+        onLoadLearningLists={() => api("/word-lists?source_type=unknown_items")}
+        onConfirmLearningList={async (id) => {
+          const result = await api<{ learning_list_version_id: string }>(`/learning-lists/${id}/confirm`, { method: "POST" });
+          return { word_list_version_id: result.learning_list_version_id };
+        }}
+        onStartDictation={onStartDictation}
         onDelete={(id) => api(`/unknown-items/${id}`, { method: "DELETE" })}
       />
     </AppShell>

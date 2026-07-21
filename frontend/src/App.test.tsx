@@ -177,6 +177,7 @@ it("opens the unknown-items page from the dictionary and creates a learning list
       ];
     if (path === "/learning-lists/from-unknown-items")
       return { id: "list-1", status: "draft" };
+    if (path === "/word-lists?source_type=unknown_items") return [];
     throw new Error(`Unexpected API call: ${path}`);
   });
 
@@ -186,10 +187,10 @@ it("opens the unknown-items page from the dictionary and creates a learning list
   await user.click(screen.getByRole("button", { name: "查看生词本" }));
   expect(await screen.findByText("apple")).toBeVisible();
   await user.click(screen.getByLabelText("选择 apple"));
-  await user.click(screen.getByRole("button", { name: "创建学习列表（1）" }));
+  await user.click(screen.getByRole("button", { name: "生成学习本（1）" }));
   expect(mockedApi).toHaveBeenCalledWith("/learning-lists/from-unknown-items", {
     method: "POST",
-    body: JSON.stringify({ unknown_item_ids: ["unknown-1"] }),
+    body: expect.stringContaining('"unknown_item_ids":["unknown-1"]'),
   });
 });
 
@@ -210,9 +211,10 @@ it("requests voice selection metadata for dictation", async () => {
   render(<App />);
   await user.click(await screen.findByRole("button", { name: "登录" }));
   await user.click(screen.getAllByRole("button", { name: "学习本" })[0]);
+  await user.click(screen.getByRole("tab", { name: "创建学习本" }));
   await user.type(screen.getByLabelText("粘贴单词"), "apple");
-  await user.click(screen.getByRole("button", { name: "整理单词" }));
-  await user.click(screen.getByRole("button", { name: "确认学习本" }));
+  await user.click(screen.getByRole("button", { name: "整理内容" }));
+  await user.click(screen.getByRole("button", { name: "保存为学习本" }));
 
   await waitFor(() =>
     expect(mockedApi).toHaveBeenCalledWith(

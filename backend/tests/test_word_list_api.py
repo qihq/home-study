@@ -14,6 +14,32 @@ def test_confirmed_word_list_appears_in_list_endpoint(client: TestClient, admin_
     assert response.json()[0]['items'] == ['Apple', 'banana']
 
 
+def test_generated_unknown_list_filters_and_returns_draft_items(client: TestClient, admin_user) -> None:
+    from app.db.session import get_session_factory
+    from app.models.child import Child
+    from app.services.unknown_items import mark_unknown_text
+
+    login = client.post('/api/auth/login', json={'username': 'parent', 'password': 'correct horse'})
+    headers = {'Cookie': login.headers['set-cookie'].split(';', 1)[0]}
+    with get_session_factory()() as session:
+        child = session.query(Child).filter(Child.active.is_(True)).first()
+        if child is None:
+            child = Child(display_name='孩子', slug='default-child', active=True)
+            session.add(child); session.commit()
+        unknown = mark_unknown_text(session, child.id, {
+            'source_text': 'apple', 'item_type': 'word', 'source_language': 'en', 'target_language': 'zh', 'translation_text': '苹果',
+        })
+        unknown_id = unknown.id
+
+    created = client.post('/api/learning-lists/from-unknown-items', headers=headers, json={'unknown_item_ids': [unknown_id], 'title': '七月生词'})
+    response = client.get('/api/word-lists?source_type=unknown_items', headers=headers)
+
+    assert created.status_code == 201
+    assert response.status_code == 200
+    assert response.json()[0]['title'] == '七月生词'
+    assert response.json()[0]['items'] == ['apple']
+
+
 def test_deleting_a_list_with_dictation_history_archives_and_hides_it(client: TestClient, admin_user) -> None:
     login = client.post('/api/auth/login', json={'username': 'parent', 'password': 'correct horse'})
     headers = {'Cookie': login.headers['set-cookie'].split(';', 1)[0]}

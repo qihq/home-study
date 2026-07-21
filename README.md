@@ -11,7 +11,19 @@ A family-learning PWA for Synology NAS. It supports Chinese and English reading 
 - 视频库按日历筛选当天打卡视频，支持不会离开 PWA 的在线预览、下载进度、系统照片保存和失败后手动重新处理。
 - 默写页以听音为主，答案默认隐藏，点击答案卡显示单词并评分。
 - 本地优先辞典：英文使用 ECDICT、中文使用 CC-CEDICT；显示多词性、其他释义、英文说明和双语例句；短语、句子和本地未命中时才使用设置页配置的 AI。
+- 学习本采用“我的学习本 / 创建学习本”分层界面；支持粘贴、图片识别和文件导入，并在保存前逐条确认单词、短语或句子。
+- 生词本可把选中的生词生成命名学习本，并以 Tab 方式保留多个草稿；确认后可直接进入默写。
 - 可重新生成词典发音；普通音色和克隆音色均只朗读目标正文。支持家庭成员、学习本、生词、统计和可选声音配置。
+- 电脑端视频下载完成后优先显示“保存 MP4 / 分享视频”操作；手机和平板继续支持系统照片保存流程。
+
+### v0.2.1 更新 / What's new in v0.2.1
+
+- 学习本把已保存内容与创建流程分为独立 Tab，并将粘贴、图片识别和文件导入拆成清晰入口。
+- Learning books now separate saved content from creation, with focused paste, image-recognition, and file-import tabs.
+- 生词本会持续保留从生词生成的多个学习本，并可确认草稿后直接开始默写。
+- Unknown-word books retain multiple generated learning books and let a parent confirm a draft before starting dictation.
+- 电脑端下载完成不会自动遮挡式弹出分享；用户可明确选择保存 MP4 或分享视频。
+- Desktop downloads now present explicit Save MP4 or Share Video actions instead of automatically opening a disruptive share flow.
 
 ## NAS 快速发布 / NAS Quick Release
 
@@ -19,9 +31,9 @@ A family-learning PWA for Synology NAS. It supports Chinese and English reading 
 
 ```powershell
 backend/scripts/download_local_dictionary.ps1
-docker buildx build --platform linux/amd64 --load -t family-learning:latest -f deploy/Dockerfile .
-docker save -o family-learning-ds918plus-amd64-v0.2.0.tar family-learning:latest
-Get-FileHash family-learning-ds918plus-amd64-v0.2.0.tar -Algorithm SHA256
+docker buildx build --platform linux/amd64 --load -t family-learning:0.2.1 -t family-learning:latest -f deploy/Dockerfile .
+docker save -o family-learning-ds918plus-amd64-v0.2.1.tar family-learning:0.2.1
+Get-FileHash family-learning-ds918plus-amd64-v0.2.1.tar -Algorithm SHA256
 ```
 
 将 tar 文件复制到 NAS 后，在同一目录新建 `.env`（不要提交此文件）：
@@ -37,7 +49,7 @@ FAMILY_LEARNING_PORT=8000
 name: family-learning
 services:
   family-learning:
-    image: family-learning:latest
+    image: family-learning:0.2.1
     command: ["single"]
     environment:
       APP_DATA_DIR: /data
