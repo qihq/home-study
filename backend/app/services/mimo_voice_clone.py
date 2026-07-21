@@ -3,6 +3,8 @@ import json
 from pathlib import Path
 from urllib.request import Request, urlopen
 
+from app.services.mimo_speech import spoken_messages
+
 
 class MimoVoiceCloneError(Exception):
     pass
@@ -14,13 +16,9 @@ class MimoVoiceCloneClient:
         self.base_url = base_url.rstrip('/')
 
     def synthesize(self, text: str, reference_wav: Path, instruction: str) -> bytes:
-        precise_instruction = (
-            instruction.rstrip() + '\nRead exactly the assistant text once. Do not explain, spell, '
-            'translate, add words, or repeat it.'
-        )
         payload = {
             'model': 'mimo-v2.5-tts-voiceclone',
-            'messages': [{'role': 'user', 'content': precise_instruction}, {'role': 'assistant', 'content': text}],
+            'messages': spoken_messages(text, instruction),
             'audio': {'format': 'wav', 'voice': f'data:audio/wav;base64,{base64.b64encode(reference_wav.read_bytes()).decode()}'},
         }
         request = Request(

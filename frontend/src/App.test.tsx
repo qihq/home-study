@@ -396,3 +396,42 @@ it("renders aggregate dictation statistics returned by the stats endpoint", asyn
   expect(screen.getByText("2")).toBeVisible();
   expect(screen.getByText("7")).toBeVisible();
 });
+
+it("returns to the home screen after a video is handed to the system share sheet", async () => {
+  const user = userEvent.setup();
+  const mockedApi = vi.mocked(api);
+  mockedApi.mockImplementation(async (path: string) => {
+    if (path === "/setup/status") return { needs_initial_admin: false };
+    if (path === "/health") return { worker: true };
+    if (path === "/recordings") return [{
+      id: "recording-1",
+      reading_date: "2026-07-21",
+      language_type: "english",
+      title: "周一英文阅读",
+      status: "ready",
+      is_official: true,
+      duration_ms: 60_000,
+      download_ready: true,
+    }];
+    throw new Error(`Unexpected API call: ${path}`);
+  });
+  const share = vi.fn().mockResolvedValue(undefined);
+  Object.defineProperty(navigator, "canShare", { configurable: true, value: vi.fn(() => true) });
+  Object.defineProperty(navigator, "share", { configurable: true, value: share });
+  vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+    ok: true,
+    headers: new Headers({ "Content-Length": "3", "Content-Type": "video/mp4" }),
+    body: { getReader: () => {
+      let sent = false;
+      return { read: async () => sent ? { done: true } : (sent = true, { done: false, value: new Uint8Array([1, 2, 3]) }) };
+    } },
+  }));
+
+  render(<App />);
+  await user.click(await screen.findByRole("button", { name: "登录" }));
+  await user.click(screen.getAllByRole("button", { name: "视频库" })[0]);
+  await user.click(await screen.findByRole("button", { name: "保存 MP4" }));
+
+  await waitFor(() => expect(share).toHaveBeenCalledOnce());
+  expect(await screen.findByRole("heading", { name: "陪孩子，慢慢积累" })).toBeVisible();
+});

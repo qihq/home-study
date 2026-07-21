@@ -8,10 +8,10 @@ A family-learning PWA for Synology NAS. It supports Chinese and English reading 
 
 - 动森风格的中英文阅读录制页，显示录制时长，录制完成后可返回主页或进入视频库。
 - 视频后台自动组装、转码、心跳续约、有限重试和恢复；不需要靠重启容器恢复普通处理中任务。
-- 视频库按日历筛选当天打卡视频，支持在线预览、下载和失败后手动重新处理。
+- 视频库按日历筛选当天打卡视频，支持不会离开 PWA 的在线预览、下载进度、系统照片保存和失败后手动重新处理。
 - 默写页以听音为主，答案默认隐藏，点击答案卡显示单词并评分。
-- 本地优先辞典：英文使用 ECDICT、中文使用 CC-CEDICT；短语、句子和本地未命中时才使用设置页配置的 AI。
-- 可重新生成词典发音；支持家庭成员、学习本、生词、统计和可选声音配置。
+- 本地优先辞典：英文使用 ECDICT、中文使用 CC-CEDICT；显示多词性、其他释义、英文说明和双语例句；短语、句子和本地未命中时才使用设置页配置的 AI。
+- 可重新生成词典发音；普通音色和克隆音色均只朗读目标正文。支持家庭成员、学习本、生词、统计和可选声音配置。
 
 ## NAS 快速发布 / NAS Quick Release
 
@@ -19,9 +19,9 @@ A family-learning PWA for Synology NAS. It supports Chinese and English reading 
 
 ```powershell
 backend/scripts/download_local_dictionary.ps1
-docker buildx build --platform linux/amd64 --load -t family-learning:latest -f deploy/Dockerfile .
-docker save -o family-learning-ds918plus-amd64.tar family-learning:latest
-Get-FileHash family-learning-ds918plus-amd64.tar -Algorithm SHA256
+docker buildx build --platform linux/amd64 --load -t family-learning:0.2.0 -t family-learning:latest -f deploy/Dockerfile .
+docker save -o family-learning-ds918plus-amd64-v0.2.0.tar family-learning:0.2.0
+Get-FileHash family-learning-ds918plus-amd64-v0.2.0.tar -Algorithm SHA256
 ```
 
 将 tar 文件复制到 NAS 后，在同一目录新建 `.env`（不要提交此文件）：

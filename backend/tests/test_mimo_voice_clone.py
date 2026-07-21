@@ -1,4 +1,5 @@
 import base64
+import json
 
 
 def test_voice_clone_sends_reference_audio_as_data_uri(monkeypatch, tmp_path) -> None:
@@ -29,7 +30,12 @@ def test_voice_clone_sends_reference_audio_as_data_uri(monkeypatch, tmp_path) ->
     assert captured['headers']['api-key'] == 'test-key'
     assert b'"model":"mimo-v2.5-tts-voiceclone"' in captured['payload']
     assert b'"voice":"data:audio/wav;base64,d2F2LWJ5dGVz"' in captured['payload']
-    assert b'Read exactly the assistant text once' in captured['payload']
+    payload = json.loads(captured['payload'])
+    assert payload['messages'] == [
+        {'role': 'system', 'content': 'Read clearly\nSpeak only the assistant content once.'},
+        {'role': 'assistant', 'content': 'apple'},
+    ]
+    assert 'translate' not in str(payload['messages']).lower()
 
 
 def test_voice_preview_marks_version_ready(monkeypatch, session, tmp_path) -> None:

@@ -2,6 +2,8 @@ import base64
 import json
 from urllib.request import Request, urlopen
 
+from app.services.mimo_speech import spoken_messages
+
 
 class MimoTtsError(Exception):
     pass
@@ -17,13 +19,7 @@ class MimoTtsClient:
     def synthesize(self, text: str) -> bytes:
         payload = {
             'model': self.model,
-            'messages': [
-                {'role': 'user', 'content': (
-                    'Read exactly the assistant text once in standard American English. '
-                    'Do not explain, spell, translate, add words, or repeat it.'
-                )},
-                {'role': 'assistant', 'content': text},
-            ],
+            'messages': spoken_messages(text),
             'audio': {'format': 'wav', 'voice': self.voice},
         }
         request = Request(

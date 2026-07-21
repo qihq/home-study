@@ -10,6 +10,7 @@ import {
   ReadingStatsPage,
 } from "./features/stats/ReadingStatsPage";
 import { RecordingItem, VideoLibrary } from "./features/recording/VideoLibrary";
+import { VideoDownloadItem, VideoDownloadPage } from "./features/recording/VideoDownloadPage";
 import {
   FailedTask,
   SettingsPage,
@@ -67,6 +68,7 @@ export function App() {
     | "dictation"
     | "stats"
     | "videos"
+    | "download"
     | "settings"
     | "dictionary"
     | "unknown-items"
@@ -77,6 +79,7 @@ export function App() {
     string | undefined
   >();
   const [recoveries, setRecoveries] = useState<RecordingSession[]>([]);
+  const [videoDownload, setVideoDownload] = useState<VideoDownloadItem | null>(null);
   useEffect(() => {
     void api<{ needs_initial_admin: boolean }>("/setup/status")
       .then((state) => setFirstRun(state.needs_initial_admin))
@@ -184,7 +187,8 @@ export function App() {
     return <UnknownItemsScreen onNavigate={navigate} />;
   if (screen === "voices") return <VoicesScreen onNavigate={navigate} />;
   if (screen === "stats") return <StatsScreen onNavigate={navigate} />;
-  if (screen === "videos") return <VideosScreen onNavigate={navigate} />;
+  if (screen === "videos") return <VideosScreen onNavigate={navigate} onDownload={(item) => { setVideoDownload(item); setScreen("download") }} />;
+  if (screen === "download" && videoDownload) return <AppShell onNavigate={navigate} activeDestination="视频库"><VideoDownloadPage item={videoDownload} onBackToVideos={() => setScreen("videos")} onHome={() => setScreen("home")} /></AppShell>;
   if (screen === "settings") return <SettingsScreen onNavigate={navigate} />;
   return (
     <AppShell onNavigate={navigate} activeDestination="今天">
@@ -657,7 +661,7 @@ function VoicesScreen({ onNavigate }: { onNavigate: (item: string) => void }) {
   );
 }
 
-function VideosScreen({ onNavigate }: { onNavigate: (item: string) => void }) {
+function VideosScreen({ onNavigate, onDownload }: { onNavigate: (item: string) => void; onDownload: (item: VideoDownloadItem) => void }) {
   const [videos, setVideos] = useState<RecordingItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -705,6 +709,7 @@ function VideosScreen({ onNavigate }: { onNavigate: (item: string) => void }) {
           await api(`/recordings/${id}/retry`, { method: "POST" });
           await load(true);
         }}
+        onDownload={onDownload}
       />
     </AppShell>
   );

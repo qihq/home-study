@@ -21,8 +21,8 @@ class DictionaryResult(BaseModel):
     primary_translation: str
     phonetic: str | None
     parts_of_speech: list[PartOfSpeech]
-    alternatives: list[str] = Field(max_length=3)
-    examples: list[DictionaryExample] = Field(max_length=3)
+    alternatives: list[str] = Field(max_length=8)
+    examples: list[DictionaryExample] = Field(max_length=5)
     usage_note: str | None
     result_source: Literal['ecdict', 'cc-cedict', 'ai'] = 'ai'
     source_attribution: str | None = None

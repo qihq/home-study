@@ -1,4 +1,6 @@
 import base64
+import json
+import pytest
 
 
 def test_mimo_tts_uses_official_chat_completion_payload(monkeypatch) -> None:
@@ -24,5 +26,16 @@ def test_mimo_tts_uses_official_chat_completion_payload(monkeypatch) -> None:
     assert captured['headers']['api-key'] == 'test-key'
     assert b'"model":"mimo-v2.5-tts"' in captured['payload']
     assert b'"voice":"Chloe"' in captured['payload']
-    assert b'Read exactly the assistant text once' in captured['payload']
-    assert b'"role":"assistant","content":"apple"' in captured['payload']
+    payload = json.loads(captured['payload'])
+    assert payload['messages'] == [
+        {'role': 'system', 'content': 'Speak only the assistant content once.'},
+        {'role': 'assistant', 'content': 'apple'},
+    ]
+    assert 'translate' not in str(payload['messages']).lower()
+
+
+def test_mimo_tts_rejects_empty_spoken_text() -> None:
+    from app.services.mimo_tts import MimoTtsClient
+
+    with pytest.raises(ValueError, match='TTS_TEXT_EMPTY'):
+        MimoTtsClient('test-key', 'https://api.example/v1', 'model', 'voice').synthesize('   ')

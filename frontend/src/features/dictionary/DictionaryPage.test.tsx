@@ -88,3 +88,23 @@ it('shows local dictionary provenance instead of an AI disclaimer', async () => 
   expect(screen.getByText('本地词典 · ECDICT')).toBeVisible()
   expect(screen.queryByText('AI 生成，请家长核对')).not.toBeInTheDocument()
 })
+
+it('renders additional meanings, usage notes, and bilingual examples', async () => {
+  const user = userEvent.setup()
+  render(<DictionaryPage onLookup={vi.fn().mockResolvedValue({
+    entry_id: 'rich-apple', source_language: 'en', target_language: 'zh', item_type: 'word', source_text: 'apple',
+    primary_translation: '苹果', phonetic: "'æpl'", parts_of_speech: [{ part: 'n.', meaning: '苹果；苹果树' }],
+    alternatives: ['苹果公司', '苹果味'], examples: [{ source: 'She ate an apple.', translation: '她吃了一个苹果。' }],
+    usage_note: 'a round fruit\nthe fruit of an apple tree', cache_hit: false, result_source: 'ecdict',
+  })} onMarkUnknown={vi.fn()} />)
+
+  await user.type(screen.getByLabelText('查询内容'), 'apple')
+  await user.click(screen.getByRole('button', { name: '查询' }))
+
+  expect(await screen.findByRole('heading', { name: '其他释义' })).toBeVisible()
+  expect(screen.getByText('苹果公司')).toBeVisible()
+  expect(screen.getByRole('heading', { name: '英文释义 / 用法提示' })).toBeVisible()
+  expect(screen.getByText('the fruit of an apple tree')).toBeVisible()
+  expect(screen.getByRole('heading', { name: '双语例句' })).toBeVisible()
+  expect(screen.getByText('她吃了一个苹果。')).toBeVisible()
+})

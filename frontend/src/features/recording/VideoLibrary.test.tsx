@@ -1,13 +1,20 @@
-import { render, screen } from '@testing-library/react'
+import { render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { vi } from 'vitest'
 import { VideoLibrary } from './VideoLibrary'
 
-it('shows a download action only for ready compressed videos', () => {
-  render(<VideoLibrary recordings={[{ id: '1', reading_date: '2026-07-12', language_type: 'chinese', status: 'ready', is_official: true, duration_ms: 60000, download_ready: true }, { id: '2', reading_date: '2026-07-12', language_type: 'english', status: 'transcoding', is_official: false, duration_ms: null, download_ready: false }]} />)
-  const download = screen.getByRole('link', { name: '下载 MP4 到设备' })
+it('opens the in-app download page only for ready compressed videos', async () => {
+  const user = userEvent.setup()
+  const onDownload = vi.fn()
+  render(<VideoLibrary onDownload={onDownload} recordings={[{ id: '1', reading_date: '2026-07-12', language_type: 'chinese', status: 'ready', is_official: true, duration_ms: 60000, download_ready: true }, { id: '2', reading_date: '2026-07-12', language_type: 'english', status: 'transcoding', is_official: false, duration_ms: null, download_ready: false }]} />)
+  const download = screen.getByRole('button', { name: '保存 MP4' })
   expect(download).toBeVisible()
-  expect(download).toHaveAttribute('download', '2026-07-12-chinese-reading.mp4')
+  expect(screen.queryByRole('link', { name: '下载 MP4 到设备' })).not.toBeInTheDocument()
+  await user.click(download)
+  expect(onDownload).toHaveBeenCalledWith(expect.objectContaining({
+    id: '1',
+    fileName: '2026-07-12-chinese-reading.mp4',
+  }))
   expect(screen.getByText('处理中')).toBeVisible()
 })
 
@@ -19,7 +26,12 @@ it('opens only the selected themed video preview and can close it', async () => 
   expect(screen.queryByLabelText(/视频预览/)).not.toBeInTheDocument()
 
   await user.click(screen.getByRole('button', { name: '播放回忆' }))
-  expect(screen.getByLabelText(/视频预览/)).toBeVisible()
+  const preview = screen.getByLabelText(/视频预览/)
+  expect(preview).toBeVisible()
+  expect(within(preview).getByText('正在播放这一天的阅读回忆')).toBeVisible()
+  const video = preview.querySelector('video')
+  expect(video).toHaveAttribute('playsinline')
+  expect(video).toHaveAttribute('controls')
   expect(screen.getByText('收起预览')).toBeVisible()
 
   await user.click(screen.getByRole('button', { name: '收起预览' }))

@@ -10,7 +10,7 @@ from app.services.voice_samples import VoiceSampleError, normalize_voice_sample
 from app.services.jobs import enqueue_once
 from app.services.tts_config import api_key, get_tts_config
 
-VOICE_AUDIO_VERSION = 2
+VOICE_AUDIO_VERSION = 3
 
 
 def _mimo_credentials(session: Session) -> tuple[str, str] | None:

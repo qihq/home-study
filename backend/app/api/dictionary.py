@@ -62,7 +62,7 @@ def lookup(payload: DictionaryLookupRequest, session: DbSession, user: Annotated
             result = local.result.model_copy(update={'result_source': local.source, 'source_attribution': attribution})
             found = store_dictionary_result(
                 session, _current_child(session).id, normalized, source, target, local_dictionary.fingerprint,
-                result, prompt_version='local-v1', owner_user_id=user.id,
+                result, prompt_version='local-v2', owner_user_id=user.id,
             )
             return {**found.result.model_dump(), 'cache_hit': found.cache_hit, 'entry_id': found.entry_id}
     config = get_ai_config(session)
@@ -73,7 +73,7 @@ def lookup(payload: DictionaryLookupRequest, session: DbSession, user: Annotated
     client = OpenAiChatClient(ai_api_key(config), config.base_url, config.model, config.timeout_seconds)
     client.fingerprint = f'{config.protocol}:{config.base_url}:{config.model}:{config.temperature}'
     try:
-        found = lookup_dictionary(session, _current_child(session).id, payload.text, payload.source_language, client, prompt_version='v1', owner_user_id=user.id)
+        found = lookup_dictionary(session, _current_child(session).id, payload.text, payload.source_language, client, prompt_version='v2', owner_user_id=user.id)
     except OpenAiChatError as error:
         raise HTTPException(502, detail={'code': str(error), 'message': 'Dictionary AI request failed'}) from error
     except DictionaryServiceError as error:

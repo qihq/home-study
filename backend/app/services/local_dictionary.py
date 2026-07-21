@@ -7,6 +7,13 @@ from typing import Literal
 from app.schemas.dictionary import DictionaryResult, PartOfSpeech
 
 
+POS_PREFIX = re.compile(r'^(n|v|vt|vi|adj|adv|prep|pron|conj|num|art|int|aux|abbr)\.\s*(.+)$', re.IGNORECASE)
+
+
+def _unique(values: list[str]) -> list[str]:
+    return list(dict.fromkeys(value for value in values if value))
+
+
 @dataclass(frozen=True)
 class LocalLookup:
     result: DictionaryResult
@@ -52,16 +59,23 @@ class LocalDictionary:
                     row = connection.execute('SELECT * FROM ecdict WHERE word = ?', (alias['word'],)).fetchone()
         if row is None:
             return None
-        translations = [line.strip() for line in (row['translation'] or '').replace('\\n', '\n').splitlines() if line.strip()]
-        definitions = [line.strip() for line in (row['definition'] or '').replace('\\n', '\n').splitlines() if line.strip()]
-        primary = translations[0] if translations else definitions[0] if definitions else row['word']
-        parts = []
-        if row['pos']:
-            parts.append(PartOfSpeech(part=row['pos'].split(':', 1)[0], meaning=primary))
+        translations = _unique([line.strip() for line in (row['translation'] or '').replace('\\n', '\n').splitlines()])
+        definitions = _unique([line.strip() for line in (row['definition'] or '').replace('\\n', '\n').splitlines()])
+        parts: list[PartOfSpeech] = []
+        alternatives: list[str] = []
+        for translation in translations:
+            match = POS_PREFIX.match(translation)
+            if match:
+                parts.append(PartOfSpeech(part=f'{match.group(1).lower()}.', meaning=match.group(2).strip()))
+            else:
+                alternatives.append(translation)
+        primary = parts[0].meaning if parts else alternatives[0] if alternatives else definitions[0] if definitions else row['word']
+        if not parts and alternatives and alternatives[0] == primary:
+            alternatives = alternatives[1:]
         return LocalLookup(result=DictionaryResult(
             source_language='en', target_language='zh', item_type='word', source_text=row['word'],
             primary_translation=primary, phonetic=row['phonetic'] or None, parts_of_speech=parts,
-            alternatives=translations[1:4], examples=[], usage_note=definitions[0] if definitions else None,
+            alternatives=alternatives[:8], examples=[], usage_note='\n'.join(definitions) if definitions else None,
         ), source='ecdict')
 
     def _lookup_chinese(self, text: str) -> LocalLookup | None:
@@ -80,5 +94,5 @@ class LocalDictionary:
         return LocalLookup(result=DictionaryResult(
             source_language='zh', target_language='en', item_type='word', source_text=row['simplified'],
             primary_translation=primary, phonetic=row['pinyin'] or None, parts_of_speech=[],
-            alternatives=definitions[1:4], examples=[], usage_note=None,
+            alternatives=definitions[1:9], examples=[], usage_note=None,
         ), source='cc-cedict')

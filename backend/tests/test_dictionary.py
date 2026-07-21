@@ -24,7 +24,7 @@ def test_dictionary_result_limits_examples_and_alternatives() -> None:
     assert result.primary_translation == '苹果'
 
     with pytest.raises(ValidationError):
-        DictionaryResult.model_validate({**result.model_dump(), 'alternatives': ['a', 'b', 'c', 'd']})
+        DictionaryResult.model_validate({**result.model_dump(), 'alternatives': list('abcdefghi')})
 
 
 def test_dictionary_prompt_declares_the_exact_response_schema() -> None:

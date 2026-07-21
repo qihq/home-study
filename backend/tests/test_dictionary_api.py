@@ -191,7 +191,8 @@ def test_local_english_and_chinese_words_work_without_ai_configuration(client: T
     repeated = client.post('/api/dictionary/lookup', json={'text': 'Apple'}, headers=headers)
 
     assert english.status_code == chinese.status_code == repeated.status_code == 200
-    assert english.json()['primary_translation'] == 'n. 苹果'
+    assert english.json()['primary_translation'] == '苹果'
+    assert english.json()['parts_of_speech'] == [{'part': 'n.', 'meaning': '苹果'}]
     assert english.json()['result_source'] == 'ecdict'
     assert english.json()['source_attribution'] == 'ECDICT (MIT)'
     assert chinese.json()['primary_translation'] == 'apple'

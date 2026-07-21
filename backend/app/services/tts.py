@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.models.tts_asset import TtsAsset
-AUDIO_VERSION = 2
+AUDIO_VERSION = 3
 
 
 def _normalize_text(text: str) -> str:

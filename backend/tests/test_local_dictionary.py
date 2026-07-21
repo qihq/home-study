@@ -11,7 +11,7 @@ def make_dictionary(path):
         CREATE INDEX cedict_simplified ON cedict(simplified);
         CREATE INDEX cedict_traditional ON cedict(traditional);
         INSERT INTO metadata VALUES ('version', 'fixture-v1');
-        INSERT INTO ecdict VALUES ('apple', '''æpl''', 'n. 苹果\\n苹果树', 'a round fruit', 'n:100');
+        INSERT INTO ecdict VALUES ('apple', '''æpl''', 'n. 苹果\\nv. 苹果化\\nadj. 苹果味的\\n苹果树', 'a round fruit\\nthe fruit of an apple tree', 'n:100');
         INSERT INTO ecdict_aliases VALUES ('apples', 'apple');
         INSERT INTO cedict VALUES ('苹果', '蘋果', 'Ping2 guo3', 'Apple (American tech company)');
         INSERT INTO cedict VALUES ('苹果', '蘋果', 'ping2 guo3', 'apple/CL:個|个[ge4]');
@@ -27,8 +27,12 @@ def test_ecdict_exact_and_alias_lookup(tmp_path):
 
     exact = dictionary.lookup('Apple', 'en')
     alias = dictionary.lookup('apples', 'en')
-    assert exact.result.primary_translation == 'n. 苹果'
+    assert exact.result.primary_translation == '苹果'
+    assert [(item.part, item.meaning) for item in exact.result.parts_of_speech] == [
+        ('n.', '苹果'), ('v.', '苹果化'), ('adj.', '苹果味的'),
+    ]
     assert exact.result.alternatives == ['苹果树']
+    assert exact.result.usage_note == 'a round fruit\nthe fruit of an apple tree'
     assert exact.result.phonetic == "'æpl'"
     assert exact.source == 'ecdict'
     assert alias.result.source_text == 'apple'
@@ -45,6 +49,7 @@ def test_cc_cedict_simplified_and_traditional_lookup(tmp_path):
     traditional = dictionary.lookup('蘋果', 'zh')
     assert simplified.result.primary_translation == 'apple'
     assert simplified.result.phonetic == 'ping2 guo3'
+    assert simplified.result.alternatives == ['CL:個|个[ge4]', 'Apple (American tech company)']
     assert simplified.source == 'cc-cedict'
     assert traditional.result.primary_translation == 'apple'
     assert dictionary.lookup('不存在', 'zh') is None

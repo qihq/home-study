@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { RecordingCalendar } from './RecordingCalendar'
+import { VideoDownloadItem } from './VideoDownloadPage'
 
 export type RecordingItem = {
   id: string
@@ -46,9 +47,10 @@ type Props = {
   onDelete?: (id: string) => Promise<void>
   onRename?: (id: string, title: string) => Promise<void>
   onRetryProcessing?: (id: string) => Promise<void>
+  onDownload?: (item: VideoDownloadItem) => void
 }
 
-export function VideoLibrary({ recordings, loading = false, loadError = null, onRetry, workerOnline = true, onMakeOfficial, onDelete, onRename, onRetryProcessing }: Props) {
+export function VideoLibrary({ recordings, loading = false, loadError = null, onRetry, workerOnline = true, onMakeOfficial, onDelete, onRename, onRetryProcessing, onDownload }: Props) {
   const [previewId, setPreviewId] = useState<string | null>(null)
   const [selectedDate, setSelectedDate] = useState<string | null>(() => recordings.map(item => item.reading_date).sort().at(-1) ?? null)
   const dateInitialized = useRef(recordings.length > 0)
@@ -128,9 +130,9 @@ export function VideoLibrary({ recordings, loading = false, loadError = null, on
               <button className="recording-preview-button" aria-expanded={isPreviewing} onClick={() => setPreviewId(isPreviewing ? null : recording.id)}>
                 <img src={asset('camera.svg')} alt="" />{isPreviewing ? '收起预览' : '播放回忆'}
               </button>
-              <a className="recording-download-button" href={`/api/recordings/${recording.id}/download/720p`} download={downloadName} aria-label="下载 MP4 到设备">
+              <button className="recording-download-button" onClick={() => onDownload?.({ id: recording.id, title, readingDate: recording.reading_date, languageType: recording.language_type, fileName: downloadName })}>
                 <img src={asset('shopping.svg')} alt="" />保存 MP4
-              </a>
+              </button>
             </>}
             {['assemble_failed', 'transcode_failed'].includes(recording.status) && <button className="recording-retry-button" onClick={() => void onRetryProcessing?.(recording.id)}>重新处理</button>}
           </div>

@@ -30,7 +30,9 @@ SYSTEM_PROMPT = (
     '"source_text":"string","primary_translation":"string","phonetic":"string|null",'
     '"parts_of_speech":[{"part":"string","meaning":"string"}],"alternatives":["string"],'
     '"examples":[{"source":"string","translation":"string"}],"usage_note":"string|null"}. '
-    'Use at most three alternatives and three examples.'
+    'For words, include common parts of speech and meanings, up to eight useful alternatives, a concise usage note, '
+    'and one to three natural bilingual examples when available. For phrases and sentences, prioritize an accurate translation. '
+    'Use no more than five examples.'
 )
 
 
