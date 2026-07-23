@@ -1,4 +1,4 @@
-import { render, screen, within } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { vi } from 'vitest'
 import { VideoLibrary } from './VideoLibrary'
@@ -98,4 +98,20 @@ it('selects the newest date when recordings arrive after the loading state', () 
 
   expect(screen.getByText('最新视频')).toBeVisible()
   expect(screen.queryByText('较早视频')).not.toBeInTheDocument()
+})
+
+it('uploads a video for the date and language selected by the parent', async () => {
+  const user = userEvent.setup()
+  const onUpload = vi.fn().mockResolvedValue(undefined)
+  render(<VideoLibrary recordings={[]} onUpload={onUpload} />)
+
+  await user.click(screen.getByRole('button', { name: '上传视频' }))
+  fireEvent.change(screen.getByLabelText('阅读日期'), { target: { value: '2026-07-18' } })
+  await user.selectOptions(screen.getByLabelText('阅读类型'), 'english')
+  const file = new File(['video'], 'family.mp4', { type: 'video/mp4' })
+  fireEvent.change(screen.getByLabelText('选择视频'), { target: { files: [file] } })
+  fireEvent.submit(screen.getByRole('button', { name: '上传到影像馆' }).closest('form')!)
+
+  await waitFor(() => expect(onUpload).toHaveBeenCalledWith({ file, readingDate: '2026-07-18', languageType: 'english' }))
+  expect(await screen.findByRole('status')).toHaveTextContent('上传完成')
 })

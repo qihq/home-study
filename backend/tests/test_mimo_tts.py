@@ -28,7 +28,7 @@ def test_mimo_tts_uses_official_chat_completion_payload(monkeypatch) -> None:
     assert b'"voice":"Chloe"' in captured['payload']
     payload = json.loads(captured['payload'])
     assert payload['messages'] == [
-        {'role': 'system', 'content': 'Speak only the assistant content once.'},
+        {'role': 'user', 'content': 'Speak only the assistant content once.'},
         {'role': 'assistant', 'content': 'apple'},
     ]
     assert 'translate' not in str(payload['messages']).lower()

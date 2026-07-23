@@ -1,11 +1,15 @@
+import hashlib
+from datetime import date
 from typing import Annotated, Literal
-from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
+from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Request, UploadFile, status
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from app.api.deps import DbSession, require_user
 from app.models.recording import Recording
 from app.models.user import User
+from app.core.config import get_settings
+from app.models.recording import RecordingChunk
 from app.services.recordings import ChunkConflict, create_recording, delete_recording, missing_sequences, upload_chunk
 from app.services.jobs import enqueue_once, reset_failed_job
 
@@ -22,6 +26,46 @@ def get_recording(session: DbSession, recording_id: str) -> Recording:
 @router.post('/recordings', status_code=status.HTTP_201_CREATED)
 def create(payload: CreateRecording, session: DbSession, _user: Annotated[User, Depends(require_user)]):
     record = create_recording(session, payload.language_type); return {'id':record.id,'status':record.status}
+
+
+@router.post('/recordings/upload', status_code=status.HTTP_201_CREATED)
+async def upload_recording(
+    session: DbSession,
+    _user: Annotated[User, Depends(require_user)],
+    file: UploadFile = File(...),
+    reading_date: date = Form(...),
+    language_type: Literal['chinese', 'english'] = Form(...),
+) -> dict:
+    content_type = (file.content_type or '').lower()
+    if not content_type.startswith('video/'):
+        raise HTTPException(422, detail={'code': 'INVALID_VIDEO_TYPE', 'message': '请选择视频文件'})
+    record = create_recording(session, language_type, reading_date)
+    directory = get_settings().uploads_dir / 'recordings' / record.id / 'chunks'
+    directory.mkdir(parents=True, exist_ok=True)
+    partial, target = directory / '0.part', directory / '0.bin'
+    digest = hashlib.sha256()
+    size = 0
+    try:
+        with partial.open('wb') as output:
+            while chunk := await file.read(1024 * 1024):
+                size += len(chunk)
+                if size > 4 * 1024 * 1024 * 1024:
+                    raise HTTPException(413, detail={'code': 'VIDEO_TOO_LARGE', 'message': '视频不能超过 4 GB'})
+                digest.update(chunk)
+                output.write(chunk)
+        if size == 0:
+            raise HTTPException(422, detail={'code': 'EMPTY_VIDEO', 'message': '视频文件为空'})
+        partial.replace(target)
+        session.add(RecordingChunk(recording_id=record.id, sequence=0, size_bytes=size, sha256=digest.hexdigest(), mime_type=content_type, path=str(target)))
+        record.status = 'assembling'
+        enqueue_once(session, 'assemble_video', record.id)
+        session.commit()
+        return {'id': record.id, 'status': record.status, 'reading_date': record.reading_date.isoformat()}
+    except Exception:
+        partial.unlink(missing_ok=True)
+        if record.id:
+            delete_recording(session, record)
+        raise
 
 
 @router.get('/recordings')

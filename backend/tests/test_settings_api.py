@@ -1,3 +1,22 @@
+from unittest.mock import patch
+
+
+def test_tts_connection_uses_unsaved_form_configuration(client, admin_user) -> None:
+    login = client.post('/api/auth/login', json={'username': 'parent', 'password': 'correct horse'})
+    headers = {'Cookie': login.headers['set-cookie'].split(';', 1)[0]}
+
+    with patch('app.api.settings.MimoTtsClient.synthesize', return_value=b'wav') as synthesize:
+        response = client.post('/api/settings/tts/test', headers=headers, json={
+            'protocol': 'mimo', 'base_url': 'https://tts.example.com/v1', 'api_key': 'new-key',
+            'model': 'mimo-test', 'voice': 'Alice', 'speed': 1,
+        })
+
+    assert response.status_code == 200
+    assert response.json()['ok'] is True
+    assert response.json()['voice'] == 'Alice'
+    synthesize.assert_called_once_with('Hello')
+
+
 def test_backup_endpoint_requires_login_and_returns_backup_name(client, admin_user) -> None:
     assert client.post('/api/settings/backup').status_code == 401
     login = client.post('/api/auth/login', json={'username': 'parent', 'password': 'correct horse'})

@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { FormEvent, useEffect, useMemo, useRef, useState } from 'react'
 import { RecordingCalendar } from './RecordingCalendar'
 import { VideoDownloadItem } from './VideoDownloadPage'
+import { Button } from '../../ui/Button'
 
 export type RecordingItem = {
   id: string
@@ -48,11 +49,23 @@ type Props = {
   onRename?: (id: string, title: string) => Promise<void>
   onRetryProcessing?: (id: string) => Promise<void>
   onDownload?: (item: VideoDownloadItem) => void
+  onUpload?: (value: { file: File; readingDate: string; languageType: 'chinese' | 'english' }) => Promise<void>
 }
 
-export function VideoLibrary({ recordings, loading = false, loadError = null, onRetry, workerOnline = true, onMakeOfficial, onDelete, onRename, onRetryProcessing, onDownload }: Props) {
+const localDate = () => {
+  const now = new Date()
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
+}
+
+export function VideoLibrary({ recordings, loading = false, loadError = null, onRetry, workerOnline = true, onMakeOfficial, onDelete, onRename, onRetryProcessing, onDownload, onUpload }: Props) {
   const [previewId, setPreviewId] = useState<string | null>(null)
   const [selectedDate, setSelectedDate] = useState<string | null>(() => recordings.map(item => item.reading_date).sort().at(-1) ?? null)
+  const [showUpload, setShowUpload] = useState(false)
+  const [uploading, setUploading] = useState(false)
+  const [uploadMessage, setUploadMessage] = useState('')
+  const [uploadDate, setUploadDate] = useState(localDate)
+  const [uploadLanguage, setUploadLanguage] = useState<'chinese' | 'english'>('chinese')
+  const [uploadFile, setUploadFile] = useState<File | null>(null)
   const dateInitialized = useRef(recordings.length > 0)
   const visibleRecordings = useMemo(() => selectedDate ? recordings.filter(item => item.reading_date === selectedDate) : recordings, [recordings, selectedDate])
   useEffect(() => {
@@ -74,6 +87,22 @@ export function VideoLibrary({ recordings, loading = false, loadError = null, on
     if (title?.trim()) await onRename?.(recording.id, title.trim())
   }
   const hasPendingWork = recordings.some(item => ['assembling', 'transcoding'].includes(item.status))
+  const submitUpload = async (event: FormEvent) => {
+    event.preventDefault()
+    if (!uploadFile || !onUpload) return
+    setUploading(true)
+    setUploadMessage('正在把视频送往小岛影像馆…')
+    try {
+      await onUpload({ file: uploadFile, readingDate: uploadDate, languageType: uploadLanguage })
+      setSelectedDate(uploadDate)
+      setUploadFile(null)
+      setUploadMessage('上传完成，视频正在后台整理，很快就能播放。')
+    } catch {
+      setUploadMessage('上传失败，请检查网络后再试，原视频不会受影响。')
+    } finally {
+      setUploading(false)
+    }
+  }
 
   return <section className="video-library">
     <header className="video-library-hero">
@@ -83,7 +112,25 @@ export function VideoLibrary({ recordings, loading = false, loadError = null, on
         <p>把每一次认真阅读，都收藏成成长的回忆。</p>
       </div>
       <img src={asset('camera.svg')} alt="" />
+      {onUpload && <button className="video-upload-toggle" onClick={() => setShowUpload(value => !value)} aria-expanded={showUpload}>
+        <img src={asset('leaf.png')} alt="" />{showUpload ? '收起上传' : '上传视频'}
+      </button>}
     </header>
+    {showUpload && onUpload && <section className="video-upload-panel">
+      <img className="video-upload-companion" src={asset('animal-icon.png')} alt="两位小岛伙伴" />
+      <div>
+        <p className="date">补录成长回忆</p>
+        <h2>从手机或电脑上传视频</h2>
+        <p>选择妈妈录视频的日期，上传后会归到那一天。</p>
+        <form onSubmit={event => void submitUpload(event)}>
+          <label>阅读日期<input aria-label="阅读日期" type="date" required max={localDate()} value={uploadDate} onChange={event => setUploadDate(event.target.value)} /></label>
+          <label>阅读类型<select aria-label="阅读类型" value={uploadLanguage} onChange={event => setUploadLanguage(event.target.value as 'chinese' | 'english')}><option value="chinese">中文阅读</option><option value="english">英文阅读</option></select></label>
+          <label className="video-file-field">选择视频<input aria-label="选择视频" type="file" required accept="video/*,.mp4,.mov,.m4v,.webm" onChange={event => setUploadFile(event.target.files?.[0] ?? null)} /><small>{uploadFile ? `${uploadFile.name} · ${(uploadFile.size / 1024 / 1024).toFixed(1)} MB` : '支持手机相册中的常见视频，最大 4 GB'}</small></label>
+          <Button type="submit" disabled={uploading || !uploadFile}>{uploading ? '正在上传…' : '上传到影像馆'}</Button>
+        </form>
+        {uploadMessage && <p role="status">{uploadMessage}</p>}
+      </div>
+    </section>}
     {!workerOnline && hasPendingWork && <p role="alert">后台处理服务离线，视频处理已暂停。重启最新容器后会继续。</p>}
     {loadError && <section className="video-library-load-error" role="alert">
       <img src={asset('critterpedia.svg')} alt="" />

@@ -19,6 +19,8 @@ from app.services.ai_config import (
     present_spelling_ocr_config, save_ai_config, save_spelling_ocr_config, spelling_ocr_provider,
 )
 from app.services.openai_chat import OpenAiChatClient, OpenAiChatError
+from app.services.mimo_tts import MimoTtsClient, MimoTtsError
+from app.services.openai_tts import OpenAiTtsClient, OpenAiTtsError
 
 router = APIRouter(tags=['settings'])
 
@@ -79,6 +81,25 @@ def update_tts(payload: TtsConfigPayload, session: DbSession, user: Annotated[Us
         require_resource_owner(session, speaker.owner_user_id if speaker else None, user)
     config = save_tts_config(session, protocol=payload.protocol, base_url=str(payload.base_url).rstrip('/'), api_key_value=payload.api_key, model=payload.model, voice=payload.voice, speed=payload.speed, pronunciation_source=payload.pronunciation_source, voice_version_id=payload.voice_version_id)
     return {**present_tts_config(config), 'queued_item_count': enqueue_missing_tts_for_confirmed_items(session)}
+
+
+@router.post('/settings/tts/test')
+def test_tts_connection(payload: TtsConfigPayload, session: DbSession, _user: Annotated[User, Depends(require_user)]) -> dict:
+    saved = get_tts_config(session)
+    secret = payload.api_key or (api_key(saved) if saved else None)
+    if not secret:
+        raise HTTPException(409, detail={'code': 'TTS_NOT_CONFIGURED', 'message': '请先填写 API Key'})
+    started = monotonic()
+    try:
+        if payload.protocol == 'mimo':
+            audio = MimoTtsClient(secret, str(payload.base_url), payload.model, payload.voice).synthesize('Hello')
+        else:
+            audio = OpenAiTtsClient(secret, str(payload.base_url), payload.model, payload.voice, payload.speed).synthesize('Hello')
+    except (MimoTtsError, OpenAiTtsError) as error:
+        raise HTTPException(502, detail={'code': str(error), 'message': '英语发音服务连接失败'}) from error
+    if not audio:
+        raise HTTPException(502, detail={'code': 'TTS_EMPTY_AUDIO', 'message': '发音服务没有返回音频'})
+    return {'ok': True, 'model': payload.model, 'voice': payload.voice, 'latency_ms': int((monotonic() - started) * 1000)}
 
 
 @router.get('/settings/ai')

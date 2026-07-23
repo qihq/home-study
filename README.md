@@ -16,6 +16,11 @@ A family-learning PWA for Synology NAS. It supports Chinese and English reading 
 - 可重新生成词典发音；普通音色和克隆音色均只朗读目标正文。支持家庭成员、学习本、生词、统计和可选声音配置。
 - 电脑端视频下载完成后优先显示“保存 MP4 / 分享视频”操作；手机和平板继续支持系统照片保存流程。
 
+### v0.2.2 更新 / What's new in v0.2.2
+
+- 修复 MiMo TTS 发音失败：MiMo API 不再允许 system 角色消息，改为 user 角色。
+- Fix MiMo TTS pronunciation failure: MiMo API no longer allows system-role messages; switched to user role.
+
 ### v0.2.1 更新 / What's new in v0.2.1
 
 - 学习本把已保存内容与创建流程分为独立 Tab，并将粘贴、图片识别和文件导入拆成清晰入口。
@@ -32,8 +37,8 @@ A family-learning PWA for Synology NAS. It supports Chinese and English reading 
 ```powershell
 backend/scripts/download_local_dictionary.ps1
 docker buildx build --platform linux/amd64 --load -t family-learning:latest -f deploy/Dockerfile .
-docker save -o family-learning-ds918plus-amd64-v0.2.1.tar family-learning:latest
-Get-FileHash family-learning-ds918plus-amd64-v0.2.1.tar -Algorithm SHA256
+docker save -o family-learning-ds918plus-amd64-v0.2.2.tar family-learning:latest
+Get-FileHash family-learning-ds918plus-amd64-v0.2.2.tar -Algorithm SHA256
 ```
 
 将 tar 文件复制到 NAS 后，在同一目录新建 `.env`（不要提交此文件）：

@@ -497,6 +497,10 @@ function SettingsScreen({
           });
           setConfig(saved);
         }}
+        onTestTts={(value) => api("/settings/tts/test", {
+          method: "POST",
+          body: JSON.stringify(value),
+        })}
         aiConfig={aiConfig ?? undefined}
         onSaveAi={async (value) => {
           const saved = await api<AiConfig>("/settings/ai", {
@@ -715,6 +719,14 @@ function VideosScreen({ onNavigate, onDownload }: { onNavigate: (item: string) =
         }}
         onRetryProcessing={async (id) => {
           await api(`/recordings/${id}/retry`, { method: "POST" });
+          await load(true);
+        }}
+        onUpload={async ({ file, readingDate, languageType }) => {
+          const body = new FormData();
+          body.set("file", file);
+          body.set("reading_date", readingDate);
+          body.set("language_type", languageType);
+          await api("/recordings/upload", { method: "POST", body });
           await load(true);
         }}
         onDownload={onDownload}

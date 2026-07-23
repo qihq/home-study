@@ -32,7 +32,7 @@ def test_voice_clone_sends_reference_audio_as_data_uri(monkeypatch, tmp_path) ->
     assert b'"voice":"data:audio/wav;base64,d2F2LWJ5dGVz"' in captured['payload']
     payload = json.loads(captured['payload'])
     assert payload['messages'] == [
-        {'role': 'system', 'content': 'Read clearly\nSpeak only the assistant content once.'},
+        {'role': 'user', 'content': 'Read clearly\nSpeak only the assistant content once.'},
         {'role': 'assistant', 'content': 'apple'},
     ]
     assert 'translate' not in str(payload['messages']).lower()

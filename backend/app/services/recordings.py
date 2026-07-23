@@ -1,5 +1,5 @@
 import hashlib
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 
 from sqlalchemy import select
@@ -13,12 +13,12 @@ from app.models.recording import Recording, RecordingChunk
 class ChunkConflict(Exception): pass
 
 
-def create_recording(session: Session, language_type: str) -> Recording:
+def create_recording(session: Session, language_type: str, reading_date: date | None = None) -> Recording:
     child = session.scalar(select(Child).where(Child.active.is_(True)).limit(1))
     if child is None:
         child = Child(display_name='孩子', slug='default-child')
         session.add(child); session.flush()
-    recording = Recording(child_id=child.id, language_type=language_type, reading_date=datetime.now().date(), status='recording')
+    recording = Recording(child_id=child.id, language_type=language_type, reading_date=reading_date or datetime.now().date(), status='recording')
     session.add(recording); session.commit(); session.refresh(recording)
     return recording
 

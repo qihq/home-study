@@ -29,6 +29,12 @@ type Props = {
   readyVoices?: ReadyVoice[];
   onBackup: () => void;
   onSave: (value: TtsConfig & { api_key?: string }) => Promise<void>;
+  onTestTts?: (value: TtsConfig & { api_key?: string }) => Promise<{
+    ok: boolean;
+    model: string;
+    voice: string;
+    latency_ms: number;
+  }>;
   aiConfig?: AiConfig;
   onSaveAi?: (value: AiConfig & { api_key?: string }) => Promise<void>;
   onTestAi?: () => Promise<{
@@ -56,6 +62,7 @@ export function SettingsPage({
   readyVoices = [],
   onBackup,
   onSave,
+  onTestTts,
   aiConfig,
   onSaveAi,
   onTestAi,
@@ -71,6 +78,7 @@ export function SettingsPage({
     api_key: "",
   });
   const [message, setMessage] = useState("");
+  const [testing, setTesting] = useState(false);
   useEffect(() => setForm({ ...config, api_key: "" }), [config]);
   const update = (key: keyof typeof form, value: string | number) =>
     setForm((current) => ({ ...current, [key]: value }));
@@ -82,6 +90,18 @@ export function SettingsPage({
       setMessage("语音配置已保存。");
     } catch {
       setMessage("保存失败，请检查接口地址和网络。");
+    }
+  };
+  const testConnection = async () => {
+    if (!onTestTts) return;
+    setTesting(true);
+    try {
+      const result = await onTestTts(form);
+      setMessage(`${result.model} / ${result.voice} 连接成功（${result.latency_ms} ms）。`);
+    } catch {
+      setMessage("连接测试失败，请检查地址、模型、音色和 API Key。");
+    } finally {
+      setTesting(false);
     }
   };
   return (
@@ -201,7 +221,12 @@ export function SettingsPage({
           {config.api_key_mask && (
             <small>当前密钥：{config.api_key_mask}</small>
           )}
-          <Button type="submit">保存语音配置</Button>
+          <div className="form-actions tts-form-actions">
+            <Button type="submit">保存语音配置</Button>
+            {onTestTts && <Button type="button" variant="secondary" disabled={testing} onClick={() => void testConnection()}>
+              <img src="/animal-island/chat.svg" alt="" />{testing ? "正在测试…" : "测试连接"}
+            </Button>}
+          </div>
         </form>
         {message && <p role="status">{message}</p>}
       </article>
