@@ -56,12 +56,15 @@ USER_AGENT = 'family-learning/1.0 (dictionary audio)'
 # Failures of a source are remembered in-process so a flaky/unreachable source
 # does not delay every word lookup with a full timeout. Two failures inside the
 # window open a circuit breaker that skips the source entirely for a while.
+# The breaker state is persisted to disk so a container restart does not make
+# the first word wait through unreachable sources again (wall-clock based).
 MISS_TTL_SECONDS = 6 * 3600
 _MISS_CACHE: dict[str, float] = {}
 BREAKER_TRIP_FAILURES = 2
 BREAKER_OPEN_SECONDS = 10 * 60
 _BREAKER_UNTIL: dict[str, float] = {}
-_FAILURE_TIMES: dict[str, list[float]] = {}
+_FAILURE_TIMES: dict[str, float] = {}
+_BREAKER_STATE_LOADED = False
 
 _ENGLISH_WORD = re.compile(r"[A-Za-z][A-Za-z'’-]*")
 _CHINESE_WORD = re.compile(r'[\u3400-\u9fff]{1,12}')
@@ -246,23 +249,71 @@ def _record_miss(source: str, text: str, accent: Accent) -> None:
     _MISS_CACHE[_miss_key(source, text, accent)] = time.monotonic()
 
 
+def _breaker_state_path() -> Path:
+    return get_settings().tts_dir / 'dictionary-audio-breaker.json'
+
+
+def _load_persisted_breaker_state() -> None:
+    """Merge the on-disk breaker state into memory; never raises."""
+    global _BREAKER_STATE_LOADED
+    if _BREAKER_STATE_LOADED:
+        return
+    _BREAKER_STATE_LOADED = True
+    try:
+        path = _breaker_state_path()
+        if not path.is_file():
+            return
+        state = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return
+    for source, entry in state.items():
+        if not isinstance(entry, dict):
+            continue
+        until = entry.get('open_until')
+        if isinstance(until, (int, float)) and until > time.time():
+            _BREAKER_UNTIL.setdefault(source, until)
+        failures = entry.get('failure_count', 0)
+        if isinstance(failures, int):
+            _FAILURE_TIMES.setdefault(source, float(failures))
+
+
+def _save_persisted_breaker_state() -> None:
+    """Write the breaker state to disk; never raises."""
+    try:
+        state = {
+            source: {'open_until': _BREAKER_UNTIL.get(source, 0.0), 'failure_count': _FAILURE_TIMES.get(source, 0)}
+            for source in set(_BREAKER_UNTIL) | set(_FAILURE_TIMES)
+        }
+        path = _breaker_state_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        partial = path.with_suffix('.json.part')
+        partial.write_text(json.dumps(state))
+        partial.replace(path)
+    except OSError:
+        pass
+
+
 def _breaker_open(source: str) -> bool:
+    _load_persisted_breaker_state()
     until = _BREAKER_UNTIL.get(source)
-    return until is not None and time.monotonic() < until
+    return until is not None and time.time() < until
 
 
 def _record_source_failure(source: str) -> None:
-    now = time.monotonic()
-    recent = [stamp for stamp in _FAILURE_TIMES.get(source, []) if now - stamp < MISS_TTL_SECONDS]
-    recent.append(now)
+    _load_persisted_breaker_state()
+    now = time.time()
+    recent = _FAILURE_TIMES.get(source, 0) + 1
     _FAILURE_TIMES[source] = recent
-    if len(recent) >= BREAKER_TRIP_FAILURES:
+    if recent >= BREAKER_TRIP_FAILURES:
         _BREAKER_UNTIL[source] = now + BREAKER_OPEN_SECONDS
+    _save_persisted_breaker_state()
 
 
 def _record_source_success(source: str) -> None:
+    _load_persisted_breaker_state()
     _FAILURE_TIMES.pop(source, None)
     _BREAKER_UNTIL.pop(source, None)
+    _save_persisted_breaker_state()
 
 
 def fetch_word_audio(

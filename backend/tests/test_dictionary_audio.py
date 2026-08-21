@@ -290,6 +290,7 @@ def test_circuit_breaker_skips_failing_sources_until_refresh(monkeypatch, tmp_pa
     module._MISS_CACHE.clear()
     module._BREAKER_UNTIL.clear()
     module._FAILURE_TIMES.clear()
+    module._BREAKER_STATE_LOADED = False
     calls = []
 
     def failing(request, timeout):
@@ -309,10 +310,36 @@ def test_circuit_breaker_skips_failing_sources_until_refresh(monkeypatch, tmp_pa
     assert module._breaker_open('dictionaryapi.dev')
     assert module._breaker_open('dictvoice')
 
+    # breaker state is persisted so a restart keeps skipping the dead sources
+    from app.core.config import get_settings
+    state_file = get_settings().tts_dir / 'dictionary-audio-breaker.json'
+    assert state_file.is_file()
+
     # an explicit refresh bypasses the breaker and retries for real
     with pytest.raises(module.DictionaryAudioError):
         module.fetch_word_audio('plum', 'en', 'us', refresh=True)
     assert len(calls) == 9
+
+
+def test_breaker_state_is_loaded_from_disk_after_restart(monkeypatch, tmp_path) -> None:
+    import json
+    import time
+    from app.core.config import get_settings
+    from app.services import dictionary_audio as module
+
+    _install_settings(monkeypatch, tmp_path)
+    module._MISS_CACHE.clear()
+    module._BREAKER_UNTIL.clear()
+    module._FAILURE_TIMES.clear()
+    module._BREAKER_STATE_LOADED = False
+    state_file = get_settings().tts_dir / 'dictionary-audio-breaker.json'
+    state_file.parent.mkdir(parents=True, exist_ok=True)
+    state_file.write_text(json.dumps({
+        'wiktionary': {'open_until': time.time() + 3600, 'failure_count': 2},
+    }))
+
+    assert module._breaker_open('wiktionary') is True
+    assert module._breaker_open('dictvoice') is False
 
 
 def test_prefetch_word_audio_fills_both_accents_and_never_raises(monkeypatch, tmp_path) -> None:

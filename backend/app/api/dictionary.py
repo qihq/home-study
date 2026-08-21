@@ -156,7 +156,7 @@ def dictionary_audio(entry_id: str, payload: DictionaryAudioRequest, session: Db
         if dictionary_asset is not None:
             return {'asset_id': dictionary_asset.id, 'source': 'dictionary_audio'}
     if source == 'native':
-        detail = {'code': 'DICTIONARY_NATIVE_UNAVAILABLE', 'message': '该条目没有辞典原生发音，请改用 AI 生成或克隆声音。'}
+        detail = {'code': 'DICTIONARY_NATIVE_UNAVAILABLE', 'message': '该条目暂时没有可用的辞典原生发音（可能未收录或发音源暂时无法访问），请改用 AI 生成或克隆声音。'}
         raise HTTPException(422, detail=detail)
     text = result['source_text'] if source_language == 'en' else result['primary_translation']
     voice_key = voice.id if voice else 'default'
