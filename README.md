@@ -28,7 +28,8 @@ A family-learning PWA for Synology NAS. It supports Chinese and English reading 
 ### v0.3.1 更新 / What's new in v0.3.1
 
 - **发音全面升级（真人录音优先）**：
-  - 英文单词发音优先使用 **Wiktionary 真人录音**（Wikimedia Commons 直连，自动选英/美音与预转码 mp3，Ogg 自动转码），Free Dictionary 与有道合成音兜底，最后才回退 MiMo TTS；本地缓存版本化，旧音频自动刷新；
+  - 英文单词发音优先使用 **Wiktionary 真人录音**（Wikimedia Commons 直连，自动选英/美音与预转码 mp3，Ogg 自动转码），Free Dictionary、有道与**百度 TTS** 逐级兜底（有道瞬时失败自动重试），最后才回退 MiMo TTS；本地缓存版本化，旧音频自动刷新；发音源熔断状态落盘，重启后不再重复等待不可达源；
+  - 中文词发音同样走有道 + 百度兜底，词典、生词本与默写共用同一套发音源与缓存；
   - 辞典页「朗读声音」新增四档来源：跟随设置 / **辞典原生发音** / AI 生成（接口音色）/ 我的克隆声音，播放后显示实际来源；查询单词即后台预取发音缓存 + 源失败熔断，点播放即时出声；
   - **生词本逐词英/美音切换**：发音设置里每个词可单独选美音/英音（迁移 `0014_word_pronunciation_accent`），默写重生成同样按词条口音取真人录音。
 - English word pronunciation now prefers real human recordings (Wiktionary/Wikimedia direct, with UK/US selection, pre-transcoded mp3 and Ogg fallback transcode), falling back to Free Dictionary, Youdao, then MiMo TTS; the dictionary page gains explicit pronunciation sources (default / native dictionary / AI voice / cloned voice) with instant cached playback, and each learning-book word can switch between American and British accent.
