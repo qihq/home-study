@@ -64,4 +64,22 @@ def test_parent_can_force_one_word_to_use_configured_native_pronunciation(client
 
     assert changed.status_code == 200
     assert changed.json()['pronunciation_source'] == 'configured'
+    assert changed.json()['accent'] == 'us'
     assert changed.json()['audio_ready'] is False
+
+
+def test_parent_can_switch_one_word_between_american_and_british_accent(client: TestClient, admin_user) -> None:
+    login = client.post('/api/auth/login', json={'username': 'parent', 'password': 'correct horse'})
+    headers = {'Cookie': login.headers['set-cookie'].split(';', 1)[0]}
+    created = client.post('/api/word-lists', json={'title': '口音词', 'pasted_text': 'water'}, headers=headers).json()
+    client.post(f"/api/word-lists/{created['id']}/confirm", headers=headers)
+    item = client.get('/api/word-lists', headers=headers).json()[0]['item_details'][0]
+    assert item['accent'] == 'us'
+
+    changed = client.patch(f"/api/word-items/{item['id']}/pronunciation", headers=headers, json={'pronunciation_source': 'default', 'accent': 'uk'})
+
+    assert changed.status_code == 200
+    assert changed.json()['accent'] == 'uk'
+    assert changed.json()['audio_ready'] is False
+    detail = client.get('/api/word-lists', headers=headers).json()[0]['item_details'][0]
+    assert detail['accent'] == 'uk'

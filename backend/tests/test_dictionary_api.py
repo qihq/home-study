@@ -47,7 +47,7 @@ def test_dictionary_audio_returns_authenticated_asset_for_a_ready_selected_voice
     response = client.post(f'/api/dictionary/entries/{entry_id}/audio', json={'voice_version_id': voice_id}, headers=headers)
 
     assert response.status_code == 200
-    assert response.json() == {'asset_id': response.json()['asset_id']}
+    assert response.json() == {'asset_id': response.json()['asset_id'], 'source': 'voice_clone'}
     assert client.get(f"/api/tts-assets/{response.json()['asset_id']}/audio", headers=headers).content == b'wav'
     with TestClient(client.app) as anonymous_client:
         assert anonymous_client.get(f"/api/tts-assets/{response.json()['asset_id']}/audio").status_code == 401
@@ -175,8 +175,9 @@ def test_dictionary_audio_prefers_free_dictionary_source_for_words(client: TestC
     audio_file = tmp_path / 'apple.mp3'
     audio_file.write_bytes(b'ID3' + b'\x00' * 60 + b'real-mp3')
 
-    def fake_ensure(session, text, source_language, accent='us', owner_user_id=None, regenerate=False):
+    def fake_ensure(session, text, source_language, accent='us', owner_user_id=None, regenerate=False, timeout=10):
         assert (text, source_language, accent, owner_user_id) == ('apple', 'en', 'us', user_id)
+        assert timeout == 5.0
         asset = TtsAsset(
             cache_key='f' * 64, provider='dictionary_audio', model='dictvoice', voice=accent,
             locale='en-US', speed=1.0, normalized_text=text, path=str(audio_file), owner_user_id=owner_user_id,
@@ -221,6 +222,7 @@ def test_dictionary_lookup_honors_auto_and_manual_direction(client: TestClient, 
 
 def test_local_english_and_chinese_words_work_without_ai_configuration(client: TestClient, admin_user, monkeypatch, tmp_path) -> None:
     _install_local_dictionary(monkeypatch, tmp_path)
+    monkeypatch.setattr('app.api.dictionary._start_audio_prefetch', lambda *_args, **_kwargs: None)
     login = client.post('/api/auth/login', json={'username': 'parent', 'password': 'correct horse'})
     headers = {'Cookie': login.headers['set-cookie'].split(';', 1)[0]}
 
@@ -265,6 +267,7 @@ def test_dictionary_lookup_uses_free_online_tier_without_ai_configuration(client
         ),
         cache_hit=False, entry_id='online-entry-1',
     ))
+    monkeypatch.setattr('app.api.dictionary._start_audio_prefetch', lambda *_args, **_kwargs: None)
     login = client.post('/api/auth/login', json={'username': 'parent', 'password': 'correct horse'})
     headers = {'Cookie': login.headers['set-cookie'].split(';', 1)[0]}
 
@@ -292,6 +295,7 @@ def test_dictionary_history_is_child_scoped_and_deletable(client: TestClient, ad
         "source_text": "apple", "primary_translation": "苹果", "phonetic": null,
         "parts_of_speech": [], "alternatives": [], "examples": [], "usage_note": null
     }''')
+    monkeypatch.setattr('app.api.dictionary._start_audio_prefetch', lambda *_args, **_kwargs: None)
     client.post('/api/dictionary/lookup', json={'text': 'apple'}, headers=headers)
 
     history = client.get('/api/dictionary/history', headers=headers)
@@ -322,6 +326,7 @@ def test_dictionary_history_uses_created_at_and_id_cursor(client: TestClient, ad
         "source_text": "pear", "primary_translation": "梨", "phonetic": null,
         "parts_of_speech": [], "alternatives": [], "examples": [], "usage_note": null
     }''')
+    monkeypatch.setattr('app.api.dictionary._start_audio_prefetch', lambda *_args, **_kwargs: None)
     client.post('/api/dictionary/lookup', json={'text': 'apple'}, headers=headers)
     client.post('/api/dictionary/lookup', json={'text': 'pear'}, headers=headers)
 
@@ -332,3 +337,105 @@ def test_dictionary_history_uses_created_at_and_id_cursor(client: TestClient, ad
     assert first['next_cursor'] is not None
     assert len(second['items']) == 1
     assert first['items'][0]['id'] != second['items'][0]['id']
+
+
+def _word_entry_json() -> str:
+    return '{"source_language":"en","target_language":"zh","item_type":"word","source_text":"apple","primary_translation":"苹果"}'
+
+
+def test_dictionary_audio_native_source_returns_dictionary_asset(client: TestClient, admin_user, monkeypatch, tmp_path) -> None:
+    from app.db.session import get_session_factory
+    from app.models.dictionary import DictionaryEntry
+    from app.models.tts_asset import TtsAsset
+
+    login = client.post('/api/auth/login', json={'username': 'parent', 'password': 'correct horse'})
+    headers = {'Cookie': login.headers['set-cookie'].split(';', 1)[0]}
+    with get_session_factory()() as session:
+        entry = DictionaryEntry(query_hash='n' * 64, result_json=_word_entry_json())
+        session.add(entry); session.commit(); entry_id = entry.id
+
+    audio_file = tmp_path / 'apple.mp3'
+    audio_file.write_bytes(b'ID3' + b'\x00' * 60 + b'native')
+
+    def fake_ensure(session, text, source_language, accent='us', owner_user_id=None, regenerate=False, timeout=10):
+        asset = TtsAsset(
+            cache_key='native' * 16, provider='dictionary_audio', model='wiktionary', voice=accent,
+            locale='en-US', speed=1.0, normalized_text=text, path=str(audio_file),
+        )
+        session.add(asset); session.commit(); session.refresh(asset)
+        return asset
+
+    monkeypatch.setattr('app.api.dictionary.ensure_word_audio_asset', fake_ensure)
+
+    response = client.post(f'/api/dictionary/entries/{entry_id}/audio', json={'source': 'native', 'accent': 'uk'}, headers=headers)
+
+    assert response.status_code == 200
+    assert response.json()['source'] == 'dictionary_audio'
+    assert client.get(f"/api/tts-assets/{response.json()['asset_id']}/audio", headers=headers).content == b'ID3' + b'\x00' * 60 + b'native'
+
+
+def test_dictionary_audio_native_source_explains_when_no_recording_exists(client: TestClient, admin_user, monkeypatch, tmp_path) -> None:
+    from app.db.session import get_session_factory
+    from app.models.dictionary import DictionaryEntry
+
+    login = client.post('/api/auth/login', json={'username': 'parent', 'password': 'correct horse'})
+    headers = {'Cookie': login.headers['set-cookie'].split(';', 1)[0]}
+    with get_session_factory()() as session:
+        entry = DictionaryEntry(query_hash='m' * 64, result_json=_word_entry_json())
+        session.add(entry); session.commit(); entry_id = entry.id
+
+    monkeypatch.setattr('app.api.dictionary.ensure_word_audio_asset', lambda *_args, **_kwargs: None)
+
+    response = client.post(f'/api/dictionary/entries/{entry_id}/audio', json={'source': 'native'}, headers=headers)
+
+    assert response.status_code == 422
+    assert response.json()['detail']['code'] == 'DICTIONARY_NATIVE_UNAVAILABLE'
+
+
+def test_dictionary_audio_configured_source_forces_tts_even_for_words(client: TestClient, admin_user, monkeypatch, tmp_path) -> None:
+    from app.db.session import get_session_factory
+    from app.models.dictionary import DictionaryEntry
+
+    login = client.post('/api/auth/login', json={'username': 'parent', 'password': 'correct horse'})
+    headers = {'Cookie': login.headers['set-cookie'].split(';', 1)[0]}
+    with get_session_factory()() as session:
+        entry = DictionaryEntry(query_hash='c' * 64, result_json=_word_entry_json())
+        session.add(entry); session.commit(); entry_id = entry.id
+
+    audio_path = tmp_path / 'configured.wav'
+    audio_path.write_bytes(b'tts')
+    called = {'dictionary': False, 'tts': False}
+
+    def fake_ensure(*_args, **_kwargs):
+        called['dictionary'] = True
+        return None
+
+    def fake_tts(_session, _text):
+        called['tts'] = True
+        return audio_path
+
+    monkeypatch.setattr('app.api.dictionary.ensure_word_audio_asset', fake_ensure)
+    monkeypatch.setattr('app.api.dictionary.generate_configured_tts', fake_tts)
+
+    response = client.post(f'/api/dictionary/entries/{entry_id}/audio', json={'source': 'configured'}, headers=headers)
+
+    assert response.status_code == 200
+    assert response.json()['source'] == 'configured_tts'
+    assert called == {'dictionary': False, 'tts': True}
+    assert client.get(f"/api/tts-assets/{response.json()['asset_id']}/audio", headers=headers).content == b'tts'
+
+
+def test_dictionary_audio_custom_source_requires_a_ready_voice(client: TestClient, admin_user, monkeypatch, tmp_path) -> None:
+    from app.db.session import get_session_factory
+    from app.models.dictionary import DictionaryEntry
+
+    login = client.post('/api/auth/login', json={'username': 'parent', 'password': 'correct horse'})
+    headers = {'Cookie': login.headers['set-cookie'].split(';', 1)[0]}
+    with get_session_factory()() as session:
+        entry = DictionaryEntry(query_hash='v' * 64, result_json=_word_entry_json())
+        session.add(entry); session.commit(); entry_id = entry.id
+
+    response = client.post(f'/api/dictionary/entries/{entry_id}/audio', json={'source': 'custom'}, headers=headers)
+
+    assert response.status_code == 422
+    assert response.json()['detail']['code'] == 'VOICE_VERSION_REQUIRED'

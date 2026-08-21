@@ -439,22 +439,34 @@ function DictionaryScreen({
       .then(setVoices)
       .catch(() => setVoices([]));
   }, []);
-  const play = async (entryId: string, voiceVersionId?: string, regenerate = false, accent: "uk" | "us" = "us") => {
-    const { asset_id } = await api<{ asset_id: string }>(
+  const play = async (
+    entryId: string,
+    options: {
+      source: "default" | "native" | "configured" | "custom";
+      voice_version_id?: string;
+      regenerate: boolean;
+      accent: "uk" | "us";
+    },
+  ) => {
+    const data = await api<{ asset_id: string; source: string }>(
       `/dictionary/entries/${entryId}/audio`,
       {
         method: "POST",
-        body: JSON.stringify(regenerate ? { voice_version_id: voiceVersionId || null, regenerate: true, accent } : { voice_version_id: voiceVersionId || null, accent }),
+        body: JSON.stringify(options),
       },
     );
     const source = URL.createObjectURL(
-      await apiAudio(`/tts-assets/${asset_id}/audio`),
+      await apiAudio(`/tts-assets/${data.asset_id}/audio`),
     );
     const audio = new Audio(source);
     audio.addEventListener("ended", () => URL.revokeObjectURL(source), {
       once: true,
     });
     await audio.play();
+    return data.source as
+      | "dictionary_audio"
+      | "configured_tts"
+      | "voice_clone";
   };
   return (
     <AppShell onNavigate={onNavigate} activeDestination="辞典">

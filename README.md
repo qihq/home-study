@@ -25,6 +25,14 @@ A family-learning PWA for Synology NAS. It supports Chinese and English reading 
 - New figure-skating video category with its own entry, ice-blue recording page, library category, upload option and calendar marker, responsive across desktop, tablet and mobile PWA.
 - Recovery offers "abandon and start over", and stale sessions whose server recording is gone are cleaned up automatically instead of wedging the page on "continue recording".
 
+### v0.3.1 更新 / What's new in v0.3.1
+
+- **发音全面升级（真人录音优先）**：
+  - 英文单词发音优先使用 **Wiktionary 真人录音**（Wikimedia Commons 直连，自动选英/美音与预转码 mp3，Ogg 自动转码），Free Dictionary 与有道合成音兜底，最后才回退 MiMo TTS；本地缓存版本化，旧音频自动刷新；
+  - 辞典页「朗读声音」新增四档来源：跟随设置 / **辞典原生发音** / AI 生成（接口音色）/ 我的克隆声音，播放后显示实际来源；查询单词即后台预取发音缓存 + 源失败熔断，点播放即时出声；
+  - **生词本逐词英/美音切换**：发音设置里每个词可单独选美音/英音（迁移 `0014_word_pronunciation_accent`），默写重生成同样按词条口音取真人录音。
+- English word pronunciation now prefers real human recordings (Wiktionary/Wikimedia direct, with UK/US selection, pre-transcoded mp3 and Ogg fallback transcode), falling back to Free Dictionary, Youdao, then MiMo TTS; the dictionary page gains explicit pronunciation sources (default / native dictionary / AI voice / cloned voice) with instant cached playback, and each learning-book word can switch between American and British accent.
+
 ### v0.3.x 更新 / What's new in v0.3.x
 
 - **发音全面升级**：

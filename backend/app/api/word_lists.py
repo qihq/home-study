@@ -32,6 +32,7 @@ class UpdateWordList(BaseModel):
 
 class PronunciationSourceInput(BaseModel):
     pronunciation_source: Literal['default', 'configured', 'custom']
+    accent: Literal['uk', 'us'] | None = None
 
 
 def _tts_progress(session: DbSession, version_id: str) -> dict:
@@ -93,7 +94,7 @@ def list_word_lists(
             'items': [item.display_text for item in items],
             'item_details': [
                 {'id': item.id, 'display_text': item.display_text, 'pronunciation_source': item.pronunciation_source,
-                 'audio_ready': item.tts_asset_id is not None}
+                 'accent': item.accent, 'audio_ready': item.tts_asset_id is not None}
                 for item in items
             ],
             'tts_progress': _tts_progress(session, version.id) if version else None,
@@ -154,10 +155,12 @@ def update_pronunciation(item_id: str, payload: PronunciationSourceInput, sessio
     if item is None:
         raise HTTPException(404, detail={'code': 'WORD_ITEM_NOT_FOUND', 'message': 'Word item not found'})
     item.pronunciation_source = payload.pronunciation_source
+    if payload.accent is not None:
+        item.accent = payload.accent
     item.tts_asset_id = None
     enqueue_once(session, 'generate_tts', item.id)
     session.commit()
-    return {'id': item.id, 'pronunciation_source': item.pronunciation_source, 'audio_ready': False}
+    return {'id': item.id, 'pronunciation_source': item.pronunciation_source, 'accent': item.accent, 'audio_ready': False}
 
 
 @router.get('/word-list-versions/{version_id}/tts-progress')

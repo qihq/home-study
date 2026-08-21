@@ -1,6 +1,7 @@
 import base64
 import json
 import re
+import threading
 from datetime import datetime
 from hashlib import sha256
 from typing import Annotated, Literal
@@ -20,7 +21,7 @@ from app.models.tts_asset import TtsAsset
 from app.models.user import User
 from app.services.ai_config import ai_api_key, get_ai_config
 from app.services.dictionary import DictionaryServiceError, delete_dictionary_history, detect_direction, dictionary_history, lookup_dictionary, store_dictionary_result
-from app.services.dictionary_audio import ensure_word_audio_asset
+from app.services.dictionary_audio import ensure_word_audio_asset, prefetch_word_audio
 from app.services.local_dictionary import LocalDictionary
 from app.services.online_dictionary import lookup_online_word
 from app.services.openai_chat import OpenAiChatClient, OpenAiChatError
@@ -30,6 +31,10 @@ from app.services.tts_config import get_tts_config
 from app.services.tts import AUDIO_VERSION
 
 router = APIRouter(tags=['dictionary'])
+
+# Interactive playback must not stall on unreachable sources; the worker path
+# keeps the longer default timeout.
+INTERACTIVE_FETCH_TIMEOUT = 5.0
 
 
 class DictionaryLookupRequest(BaseModel):
@@ -41,6 +46,22 @@ class DictionaryAudioRequest(BaseModel):
     voice_version_id: str | None = None
     regenerate: bool = False
     accent: Literal['uk', 'us'] = 'us'
+    source: Literal['default', 'native', 'configured', 'custom'] = 'default'
+
+
+def _start_audio_prefetch(text: str, source_language: str) -> None:
+    """Fill the disk cache for a looked-up word so play is instant.
+
+    Runs detached and never raises; the play endpoint simply finds the cached
+    file afterwards. Network calls happen in the thread, not the request.
+    """
+    def worker() -> None:
+        try:
+            prefetch_word_audio(text, source_language)
+        except Exception:
+            pass
+
+    threading.Thread(target=worker, name=f'dict-audio-prefetch:{text[:20]}', daemon=True).start()
 
 
 def _current_child(session: DbSession) -> Child:
@@ -67,11 +88,13 @@ def lookup(payload: DictionaryLookupRequest, session: DbSession, user: Annotated
                 session, _current_child(session).id, normalized, source, target, local_dictionary.fingerprint,
                 result, prompt_version='local-v2', owner_user_id=user.id,
             )
+            _prefetch_word_audio(result)
             return {**found.result.model_dump(), 'cache_hit': found.cache_hit, 'entry_id': found.entry_id}
     if source == 'en' and local_eligible:
         # Free online dictionary tier for English words (30-day cached), below the LLM tier.
         online = lookup_online_word(session, _current_child(session).id, normalized, user.id)
         if online is not None:
+            _prefetch_word_audio(online.result)
             return {**online.result.model_dump(), 'cache_hit': online.cache_hit, 'entry_id': online.entry_id}
     config = get_ai_config(session)
     if config is None or not config.enabled or not config.api_key_encrypted:
@@ -86,7 +109,13 @@ def lookup(payload: DictionaryLookupRequest, session: DbSession, user: Annotated
         raise HTTPException(502, detail={'code': str(error), 'message': 'Dictionary AI request failed'}) from error
     except DictionaryServiceError as error:
         raise HTTPException(422, detail={'code': str(error), 'message': 'Dictionary result is invalid'}) from error
+    _prefetch_word_audio(found.result)
     return {**found.result.model_dump(), 'cache_hit': found.cache_hit, 'entry_id': found.entry_id}
+
+
+def _prefetch_word_audio(result) -> None:
+    if getattr(result, 'item_type', None) == 'word':
+        _start_audio_prefetch(result.source_text, result.source_language)
 
 
 @router.post('/dictionary/entries/{entry_id}/audio')
@@ -99,7 +128,15 @@ def dictionary_audio(entry_id: str, payload: DictionaryAudioRequest, session: Db
     result = json.loads(entry.result_json)
     source_language = result.get('source_language', 'en')
     configured = get_tts_config(session)
-    selected_voice_id = payload.voice_version_id or (configured.voice_version_id if configured and configured.pronunciation_source == 'custom' else None)
+    source = payload.source
+    force_tts = source in ('configured', 'custom')
+    selected_voice_id: str | None = None
+    if source == 'custom':
+        selected_voice_id = payload.voice_version_id or (configured.voice_version_id if configured and configured.pronunciation_source == 'custom' else None)
+        if selected_voice_id is None:
+            raise HTTPException(422, detail={'code': 'VOICE_VERSION_REQUIRED', 'message': '请先选择已就绪的克隆声音。'})
+    elif source == 'default':
+        selected_voice_id = payload.voice_version_id or (configured.voice_version_id if configured and configured.pronunciation_source == 'custom' else None)
     voice = session.get(VoiceVersion, selected_voice_id) if selected_voice_id else None
     if selected_voice_id and (voice is None or voice.status != 'ready'):
         raise HTTPException(409, detail={'code': 'VOICE_VERSION_NOT_READY', 'message': 'Selected voice is not ready'})
@@ -108,14 +145,19 @@ def dictionary_audio(entry_id: str, payload: DictionaryAudioRequest, session: Db
         if speaker is None:
             raise HTTPException(404, detail={'code': 'SPEAKER_NOT_FOUND', 'message': 'Speaker not found'})
         require_resource_owner(session, speaker.owner_user_id, user)
-    if voice is None and result.get('item_type') == 'word':
+    is_word = result.get('item_type') == 'word'
+    if voice is None and not force_tts and is_word:
         # Single words get real dictionary audio (free sources, cached); fall back to TTS on failure.
         dictionary_asset = ensure_word_audio_asset(
             session, result['source_text'], source_language,
             accent=payload.accent, owner_user_id=user.id, regenerate=payload.regenerate,
+            timeout=INTERACTIVE_FETCH_TIMEOUT,
         )
         if dictionary_asset is not None:
-            return {'asset_id': dictionary_asset.id}
+            return {'asset_id': dictionary_asset.id, 'source': 'dictionary_audio'}
+    if source == 'native':
+        detail = {'code': 'DICTIONARY_NATIVE_UNAVAILABLE', 'message': '该条目没有辞典原生发音，请改用 AI 生成或克隆声音。'}
+        raise HTTPException(422, detail=detail)
     text = result['source_text'] if source_language == 'en' else result['primary_translation']
     voice_key = voice.id if voice else 'default'
     cache_material = f'dictionary:v{AUDIO_VERSION}:{user.id}:{voice_key}:{text}'
@@ -132,7 +174,7 @@ def dictionary_audio(entry_id: str, payload: DictionaryAudioRequest, session: Db
         session.add(asset)
         session.commit()
         session.refresh(asset)
-    return {'asset_id': asset.id}
+    return {'asset_id': asset.id, 'source': 'voice_clone' if voice else 'configured_tts'}
 
 
 def _decode_cursor(cursor: str | None) -> tuple[datetime, str] | None:

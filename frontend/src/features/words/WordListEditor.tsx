@@ -5,7 +5,7 @@ import { Button } from '../../ui/Button'
 type CreateSource = 'paste' | 'image' | 'file'
 type MainTab = 'saved' | 'create'
 type TtsProgress = { total: number; ready: number; queued: number; running: number; failed: number; progress?: number }
-type ItemDetail = { id: string; display_text: string; pronunciation_source: 'default' | 'configured' | 'custom'; audio_ready: boolean }
+type ItemDetail = { id: string; display_text: string; pronunciation_source: 'default' | 'configured' | 'custom'; accent: 'uk' | 'us'; audio_ready: boolean }
 type SavedList = { id: string; title: string; status: string; source_type: CreateSource | 'unknown_items'; word_list_version_id: string | null; items: string[]; item_details?: ItemDetail[]; tts_progress: TtsProgress | null }
 
 const sourceLabels: Record<SavedList['source_type'], string> = { paste: '手动录入', image: '图片识别', file: '文件导入', unknown_items: '生词生成' }
@@ -164,9 +164,10 @@ export function WordListEditor({ onConfirm }: { onConfirm: (words: string[], ver
     }
   }
 
-  const changePronunciation = async (detail: ItemDetail, pronunciation_source: ItemDetail['pronunciation_source']) => {
-    await api(`/word-items/${detail.id}/pronunciation`, { method: 'PATCH', body: JSON.stringify({ pronunciation_source }) })
-    setSavedLists(current => current.map(list => ({ ...list, item_details: list.item_details?.map(item => item.id === detail.id ? { ...item, pronunciation_source, audio_ready: false } : item) })))
+  const changePronunciation = async (detail: ItemDetail, patch: Partial<Pick<ItemDetail, 'pronunciation_source' | 'accent'>>) => {
+    const next = { pronunciation_source: detail.pronunciation_source, accent: detail.accent, ...patch }
+    await api(`/word-items/${detail.id}/pronunciation`, { method: 'PATCH', body: JSON.stringify({ pronunciation_source: next.pronunciation_source, accent: next.accent }) })
+    setSavedLists(current => current.map(list => ({ ...list, item_details: list.item_details?.map(item => item.id === detail.id ? { ...item, ...next, audio_ready: false } : item) })))
     setMessage(`“${detail.display_text}”正在重新生成发音。`)
   }
 
@@ -189,7 +190,7 @@ export function WordListEditor({ onConfirm }: { onConfirm: (words: string[], ver
         <div className="learning-list-card-heading"><strong>{list.title}</strong><span>{sourceLabels[list.source_type]}</span></div>
         <p>{list.items.length} 条：{list.items.slice(0, 5).join('、')}{list.items.length > 5 ? '…' : ''}</p>
         {list.tts_progress && <><progress max="100" value={list.tts_progress.progress ?? 0} aria-label={`${list.title} 本地发音进度`} /><p className="learning-list-progress">发音 {list.tts_progress.progress ?? 0}% · 已完成 {list.tts_progress.ready}/{list.tts_progress.total}</p></>}
-        {list.item_details?.length ? <details className="learning-pronunciation-settings"><summary>发音设置</summary>{list.item_details.map(detail => <label key={detail.id}>{detail.display_text} 发音来源<select aria-label={`${detail.display_text} 发音来源`} value={detail.pronunciation_source} onChange={event => void changePronunciation(detail, event.target.value as ItemDetail['pronunciation_source'])}><option value="default">跟随系统默认</option><option value="configured">原生发音</option><option value="custom">自定义声音</option></select>{!detail.audio_ready && <small>重新生成中</small>}</label>)}</details> : null}
+        {list.item_details?.length ? <details className="learning-pronunciation-settings"><summary>发音设置</summary>{list.item_details.map(detail => <div className="learning-pronunciation-item" key={detail.id}><label>{detail.display_text} 发音来源<select aria-label={`${detail.display_text} 发音来源`} value={detail.pronunciation_source} onChange={event => void changePronunciation(detail, { pronunciation_source: event.target.value as ItemDetail['pronunciation_source'] })}><option value="default">跟随系统默认</option><option value="configured">原生发音</option><option value="custom">自定义声音</option></select></label><label>发音口音<select aria-label={`${detail.display_text} 发音口音`} value={detail.accent} disabled={detail.pronunciation_source === 'custom'} onChange={event => void changePronunciation(detail, { accent: event.target.value as 'uk' | 'us' })}><option value="us">美音</option><option value="uk">英音</option></select></label>{!detail.audio_ready && <small>重新生成中</small>}</div>)}</details> : null}
         <div className="list-actions">{list.word_list_version_id && <Button onClick={() => onConfirm(list.items, list.word_list_version_id!)}>开始默写</Button>}<Button variant="secondary" onClick={() => edit(list)}>查看/编辑</Button><Button variant="danger" onClick={() => void remove(list)}>删除</Button></div>
       </article>)}</div>}
     </section>}

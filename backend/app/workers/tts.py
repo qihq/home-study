@@ -67,7 +67,7 @@ def process_generate_tts(session: Session, word_item_id: str, report_progress=la
         return
     if pronunciation_source != 'custom':
         # Single words prefer real dictionary audio over LLM-style TTS; falls back below on failure.
-        dictionary_asset = ensure_word_audio_asset(session, item.display_text, item.source_language)
+        dictionary_asset = ensure_word_audio_asset(session, item.display_text, item.source_language, accent=item.accent or 'us')
         if dictionary_asset is not None:
             item.tts_asset_id = dictionary_asset.id
             session.commit()
@@ -100,7 +100,7 @@ def process_generate_tts(session: Session, word_item_id: str, report_progress=la
 
 def regenerate_configured_item_tts(session: Session, item: WordItem) -> str:
     # Single words re-fetch real dictionary audio first; falls back to TTS below.
-    dictionary_asset = ensure_word_audio_asset(session, item.display_text, item.source_language, regenerate=True)
+    dictionary_asset = ensure_word_audio_asset(session, item.display_text, item.source_language, accent=item.accent or 'us', regenerate=True)
     if dictionary_asset is not None:
         item.tts_asset_id = dictionary_asset.id
         session.commit()

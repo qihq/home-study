@@ -46,3 +46,4 @@ class LearningItem(Base):
     warning_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     tts_asset_id: Mapped[str | None] = mapped_column(ForeignKey('tts_assets.id'), nullable=True)
     pronunciation_source: Mapped[str] = mapped_column(String(20), default='default')
+    accent: Mapped[str] = mapped_column(String(2), default='us')

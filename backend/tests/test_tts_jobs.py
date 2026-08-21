@@ -51,10 +51,12 @@ def test_generate_tts_job_prefers_dictionary_audio_for_single_words(session, mon
 
     audio_file = tmp_path / 'apple.mp3'
     audio_file.write_bytes(b'ID3' + b'\x00' * 60 + b'mp3')
+    seen = {}
 
     def fake_ensure(session, text, source_language, **_kwargs):
+        seen['accent'] = _kwargs.get('accent')
         asset = TtsAsset(
-            cache_key='d' * 64, provider='dictionary_audio', model='dictvoice', voice='us',
+            cache_key='d' * 64, provider='dictionary_audio', model='dictvoice', voice=seen['accent'] or 'us',
             locale='en-US', speed=1.0, normalized_text=text, path=str(audio_file),
         )
         session.add(asset); session.commit(); session.refresh(asset)
@@ -65,8 +67,44 @@ def test_generate_tts_job_prefers_dictionary_audio_for_single_words(session, mon
     process_generate_tts(session, item.id)
 
     session.refresh(item)
+    assert seen['accent'] == 'us'
     assert item.tts_asset_id is not None
     assert session.get(TtsAsset, item.tts_asset_id).provider == 'dictionary_audio'
+
+
+def test_generate_tts_job_honors_the_items_british_accent(session, monkeypatch, tmp_path) -> None:
+    from app.models.child import Child
+    from app.models.tts_asset import TtsAsset
+    from app.services.tts_config import save_tts_config
+    from app.services.words import confirm_word_list, create_draft_word_list
+    from app.workers.tts import process_generate_tts
+
+    save_tts_config(session, protocol='mimo', base_url='https://api.xiaomimimo.com/v1', api_key_value='key', model='mimo-v2.5-tts', voice='Chloe', speed=1.0)
+    child = Child(display_name='孩子', slug='accent-audio-child'); session.add(child); session.commit()
+    word_list = create_draft_word_list(session, child.id, 'accent', [{'display_text': 'water', 'normalized_text': 'water'}])
+    version = confirm_word_list(session, word_list.id)
+    item = version.items[0]
+    item.accent = 'uk'; session.commit()
+
+    audio_file = tmp_path / 'water.mp3'
+    audio_file.write_bytes(b'ID3' + b'\x00' * 60 + b'mp3')
+    seen = {}
+
+    def fake_ensure(session, text, source_language, **_kwargs):
+        seen['accent'] = _kwargs.get('accent')
+        asset = TtsAsset(
+            cache_key='u' * 64, provider='dictionary_audio', model='wiktionary', voice=seen['accent'],
+            locale='en-US', speed=1.0, normalized_text=text, path=str(audio_file),
+        )
+        session.add(asset); session.commit(); session.refresh(asset)
+        return asset
+
+    monkeypatch.setattr('app.workers.tts.ensure_word_audio_asset', fake_ensure)
+
+    process_generate_tts(session, item.id)
+
+    assert seen['accent'] == 'uk'
+    assert session.get(TtsAsset, item.tts_asset_id).voice == 'uk'
 
 
 def test_audio_version_upgrade_requeues_existing_word_audio(session) -> None:
@@ -143,6 +181,47 @@ def test_dictionary_audio_asset_with_current_version_is_kept(session, monkeypatc
     session.refresh(version.items[0])
     assert version.items[0].tts_asset_id == fresh.id
     assert session.query(Job).filter_by(type='generate_tts', entity_id=version.items[0].id, status='queued').count() == 0
+
+
+def test_dictionary_audio_asset_key_must_match_the_items_accent(session, monkeypatch, tmp_path) -> None:
+    from app.core.config import get_settings
+    from app.models.child import Child
+    from app.models.job import Job
+    from app.models.tts_asset import TtsAsset
+    from app.services.dictionary_audio import dictionary_asset_cache_key
+    from app.services.learning_items import enqueue_missing_tts_for_confirmed_items
+    from app.services.tts_config import save_tts_config
+    from app.services.words import confirm_word_list, create_draft_word_list
+
+    monkeypatch.setenv('APP_DATA_DIR', str(tmp_path / 'data'))
+    get_settings.cache_clear()
+    save_tts_config(session, protocol='mimo', base_url='https://api.xiaomimimo.com/v1', api_key_value='key', model='mimo-v2.5-tts', voice='Chloe', speed=1.0)
+    child = Child(display_name='孩子', slug='accent-key-audio'); session.add(child); session.commit()
+    word_list = create_draft_word_list(session, child.id, 'test', [
+        {'display_text': 'water', 'normalized_text': 'water'},
+        {'display_text': 'table', 'normalized_text': 'table'},
+    ])
+    version = confirm_word_list(session, word_list.id)
+    for job in session.query(Job).filter_by(type='generate_tts').all():
+        session.delete(job)
+    water, table = version.items
+    water.accent = 'uk'; table.accent = 'uk'
+    us_key = TtsAsset(
+        cache_key=dictionary_asset_cache_key('water', 'us', 'shared'), provider='dictionary_audio',
+        model='wiktionary', voice='us', locale='en-US', speed=1.0, normalized_text='water', path='/us.mp3',
+    )
+    uk_key = TtsAsset(
+        cache_key=dictionary_asset_cache_key('table', 'uk', 'shared'), provider='dictionary_audio',
+        model='wiktionary', voice='uk', locale='en-US', speed=1.0, normalized_text='table', path='/uk.mp3',
+    )
+    session.add_all([us_key, uk_key]); session.flush()
+    water.tts_asset_id = us_key.id; table.tts_asset_id = uk_key.id
+    session.commit()
+
+    assert enqueue_missing_tts_for_confirmed_items(session) == 1
+    session.refresh(water); session.refresh(table)
+    assert water.tts_asset_id is None
+    assert table.tts_asset_id == uk_key.id
 
 
 def test_dictionary_audio_upgrade_requeues_legacy_tts_word_audio_once(session, monkeypatch, tmp_path) -> None:

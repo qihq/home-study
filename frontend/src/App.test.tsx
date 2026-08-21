@@ -146,7 +146,7 @@ it("wires the dictionary and AI settings pages to their API endpoints", async ()
     if (path === "/voice-versions?ready=true")
       return [{ id: "voice-1", display_name: "妈妈 / 清晰美音" }];
     if (path === "/dictionary/entries/entry-1/audio")
-      return { asset_id: "asset-1" };
+      return { asset_id: "asset-1", source: "voice_clone" };
     throw new Error(`Unexpected API call: ${path}`);
   });
 
@@ -166,11 +166,17 @@ it("wires the dictionary and AI settings pages to their API endpoints", async ()
     "/dictionary/entries/entry-1/mark-unknown",
     { method: "POST" },
   );
-  await user.selectOptions(screen.getByLabelText("朗读声音"), "voice-1");
+  await user.selectOptions(screen.getByLabelText("朗读声音"), "custom");
+  await user.selectOptions(screen.getByLabelText("克隆声音"), "voice-1");
   await user.click(screen.getByRole("button", { name: "播放发音" }));
   expect(mockedApi).toHaveBeenCalledWith("/dictionary/entries/entry-1/audio", {
     method: "POST",
-    body: JSON.stringify({ voice_version_id: "voice-1", accent: "us" }),
+    body: JSON.stringify({
+      source: "custom",
+      voice_version_id: "voice-1",
+      regenerate: false,
+      accent: "us",
+    }),
   });
   expect(mockedApiAudio).toHaveBeenCalledWith("/tts-assets/asset-1/audio");
 

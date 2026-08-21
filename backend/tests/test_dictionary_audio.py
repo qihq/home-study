@@ -281,3 +281,73 @@ def test_ensure_word_audio_asset_returns_none_on_failure_and_non_words(session, 
     assert module.ensure_word_audio_asset(session, 'apple', 'en') is None
     assert module.ensure_word_audio_asset(session, 'two words', 'en') is None
     assert session.query(TtsAsset).count() == 0
+
+
+def test_circuit_breaker_skips_failing_sources_until_refresh(monkeypatch, tmp_path) -> None:
+    from app.services import dictionary_audio as module
+
+    _install_settings(monkeypatch, tmp_path)
+    module._MISS_CACHE.clear()
+    module._BREAKER_UNTIL.clear()
+    module._FAILURE_TIMES.clear()
+    calls = []
+
+    def failing(request, timeout):
+        calls.append(request.full_url)
+        raise OSError('network down')
+
+    monkeypatch.setattr(module, 'urlopen', failing)
+
+    for word in ('apple', 'pear', 'plum'):
+        with pytest.raises(module.DictionaryAudioError):
+            module.fetch_word_audio(word, 'en', 'us')
+
+    # apple: 3 sources tried; pear: 3 more (breakers open on 2nd failure);
+    # plum: all three breakers open, nothing is fetched anymore.
+    assert len(calls) == 6
+    assert module._breaker_open('wiktionary')
+    assert module._breaker_open('dictionaryapi.dev')
+    assert module._breaker_open('dictvoice')
+
+    # an explicit refresh bypasses the breaker and retries for real
+    with pytest.raises(module.DictionaryAudioError):
+        module.fetch_word_audio('plum', 'en', 'us', refresh=True)
+    assert len(calls) == 9
+
+
+def test_prefetch_word_audio_fills_both_accents_and_never_raises(monkeypatch, tmp_path) -> None:
+    from app.services import dictionary_audio as module
+
+    _install_settings(monkeypatch, tmp_path)
+    module._MISS_CACHE.clear()
+    module._BREAKER_UNTIL.clear()
+    module._FAILURE_TIMES.clear()
+    calls = []
+
+    def fake_urlopen(request, timeout):
+        url = request.full_url
+        calls.append(url)
+        if url == 'https://en.wiktionary.org/wiki/apple':
+            return _FakeResponse(_wiktionary_html([
+                '//upload.wikimedia.org/wikipedia/commons/9/9a/En-us-apple.ogg',
+                '//upload.wikimedia.org/wikipedia/commons/c/c8/En-uk-apple.ogg',
+            ]))
+        if url.endswith('En-us-apple.ogg'):
+            return _FakeResponse(_mp3(b'us'))
+        if url.endswith('En-uk-apple.ogg'):
+            return _FakeResponse(_mp3(b'uk'))
+        raise AssertionError(f'unexpected url {url}')
+
+    monkeypatch.setattr(module, 'urlopen', fake_urlopen)
+
+    assert module.prefetch_word_audio('apple', 'en') == {'us': 'wiktionary', 'uk': 'wiktionary'}
+
+    # the play path now hits the disk cache with zero network requests
+    before = len(calls)
+    path, source = module.fetch_word_audio('apple', 'en', 'us')
+    assert (source, len(calls)) == ('cached', before)
+    assert path.read_bytes() == _mp3(b'us')
+
+    # failures stay silent and leave the cache untouched
+    monkeypatch.setattr(module, 'urlopen', lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError('down')))
+    assert module.prefetch_word_audio('pear', 'en') == {}

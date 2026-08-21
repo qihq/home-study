@@ -54,9 +54,14 @@ WIKTIONARY_URL = 'https://en.wiktionary.org/wiki/{word}'
 USER_AGENT = 'family-learning/1.0 (dictionary audio)'
 
 # Failures of a source are remembered in-process so a flaky/unreachable source
-# does not delay every word lookup with a full timeout.
+# does not delay every word lookup with a full timeout. Two failures inside the
+# window open a circuit breaker that skips the source entirely for a while.
 MISS_TTL_SECONDS = 6 * 3600
 _MISS_CACHE: dict[str, float] = {}
+BREAKER_TRIP_FAILURES = 2
+BREAKER_OPEN_SECONDS = 10 * 60
+_BREAKER_UNTIL: dict[str, float] = {}
+_FAILURE_TIMES: dict[str, list[float]] = {}
 
 _ENGLISH_WORD = re.compile(r"[A-Za-z][A-Za-z'’-]*")
 _CHINESE_WORD = re.compile(r'[\u3400-\u9fff]{1,12}')
@@ -241,6 +246,25 @@ def _record_miss(source: str, text: str, accent: Accent) -> None:
     _MISS_CACHE[_miss_key(source, text, accent)] = time.monotonic()
 
 
+def _breaker_open(source: str) -> bool:
+    until = _BREAKER_UNTIL.get(source)
+    return until is not None and time.monotonic() < until
+
+
+def _record_source_failure(source: str) -> None:
+    now = time.monotonic()
+    recent = [stamp for stamp in _FAILURE_TIMES.get(source, []) if now - stamp < MISS_TTL_SECONDS]
+    recent.append(now)
+    _FAILURE_TIMES[source] = recent
+    if len(recent) >= BREAKER_TRIP_FAILURES:
+        _BREAKER_UNTIL[source] = now + BREAKER_OPEN_SECONDS
+
+
+def _record_source_success(source: str) -> None:
+    _FAILURE_TIMES.pop(source, None)
+    _BREAKER_UNTIL.pop(source, None)
+
+
 def fetch_word_audio(
     text: str, source_language: str, accent: Accent = 'us', timeout: float = 10, refresh: bool = False,
 ) -> tuple[Path, str]:
@@ -269,14 +293,16 @@ def fetch_word_audio(
     sources.append(('dictvoice', lambda: _youdao_bytes(normalized, accent, timeout)))
     last_error: DictionaryAudioError | None = None
     for source, fetch in sources:
-        if not refresh and _miss_fresh(source, normalized, accent):
+        if not refresh and (_breaker_open(source) or _miss_fresh(source, normalized, accent)):
             continue
         try:
             data = fetch()
         except DictionaryAudioError as error:
             last_error = error
             _record_miss(source, normalized, accent)
+            _record_source_failure(source)
             continue
+        _record_source_success(source)
         suffix = _audio_suffix(data)
         if suffix == '.ogg':
             transcoded = _transcode_to_mp3(data)
@@ -295,9 +321,28 @@ def dictionary_asset_cache_key(text: str, accent: Accent, owner: str) -> str:
     return hashlib.sha256(f'dictionary-audio:v{DICTIONARY_AUDIO_VERSION}:{owner}:{accent}:{text}'.encode()).hexdigest()
 
 
+def prefetch_word_audio(
+    text: str, source_language: str, accents: tuple[Accent, ...] = ('us', 'uk'), timeout: float = 5,
+) -> dict[str, str]:
+    """Best-effort cache fill for the accents a user is likely to pick.
+
+    Called after dictionary lookups so the play button hits the disk cache
+    instead of the network. Never raises; returns ``{accent: source}`` for
+    every accent that produced audio.
+    """
+    fetched: dict[str, str] = {}
+    for accent in accents:
+        try:
+            _path, source = fetch_word_audio(text, source_language, accent, timeout=timeout)
+            fetched[accent] = source
+        except DictionaryAudioError:
+            continue
+    return fetched
+
+
 def ensure_word_audio_asset(
     session: Session, text: str, source_language: str, *,
-    accent: Accent = 'us', owner_user_id: str | None = None, regenerate: bool = False,
+    accent: Accent = 'us', owner_user_id: str | None = None, regenerate: bool = False, timeout: float = 10,
 ) -> TtsAsset | None:
     """Return a ready ``TtsAsset`` backed by free dictionary audio, or None.
 
@@ -315,7 +360,7 @@ def ensure_word_audio_asset(
         if existing is not None:
             return existing
     try:
-        path, source = fetch_word_audio(normalized, source_language, accent, refresh=regenerate)
+        path, source = fetch_word_audio(normalized, source_language, accent, timeout=timeout, refresh=regenerate)
     except DictionaryAudioError:
         return None
     locale = 'en-US' if source_language == 'en' else 'zh-CN'

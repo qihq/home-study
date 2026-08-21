@@ -128,14 +128,32 @@ it('lets a parent force one saved word to use native pronunciation', async () =>
     if (path === '/health') return { worker: true }
     if (path === '/word-lists') return [{
       id: 'list-1', title: 'Unit 1', status: 'confirmed', source_type: 'paste', word_list_version_id: 'version-1', items: ['use'], tts_progress: null,
-      item_details: [{ id: 'item-1', display_text: 'use', pronunciation_source: 'default', audio_ready: true }],
+      item_details: [{ id: 'item-1', display_text: 'use', pronunciation_source: 'default', accent: 'us', audio_ready: true }],
     }]
-    if (path === '/word-items/item-1/pronunciation' && init?.method === 'PATCH') return { id: 'item-1', pronunciation_source: 'configured', audio_ready: false }
+    if (path === '/word-items/item-1/pronunciation' && init?.method === 'PATCH') return { id: 'item-1', pronunciation_source: 'configured', accent: 'us', audio_ready: false }
     throw new Error(`Unexpected API call: ${path}`)
   })
   render(<WordListEditor onConfirm={vi.fn()} />)
 
   await user.selectOptions(await screen.findByLabelText('use 发音来源'), 'configured')
 
-  expect(api).toHaveBeenCalledWith('/word-items/item-1/pronunciation', expect.objectContaining({ method: 'PATCH', body: JSON.stringify({ pronunciation_source: 'configured' }) }))
+  expect(api).toHaveBeenCalledWith('/word-items/item-1/pronunciation', expect.objectContaining({ method: 'PATCH', body: JSON.stringify({ pronunciation_source: 'configured', accent: 'us' }) }))
+})
+
+it('lets a parent switch one saved word between American and British accent', async () => {
+  const user = userEvent.setup()
+  vi.mocked(api).mockImplementation(async (path: string, init?: RequestInit) => {
+    if (path === '/health') return { worker: true }
+    if (path === '/word-lists') return [{
+      id: 'list-1', title: 'Unit 1', status: 'confirmed', source_type: 'paste', word_list_version_id: 'version-1', items: ['water'], tts_progress: null,
+      item_details: [{ id: 'item-1', display_text: 'water', pronunciation_source: 'default', accent: 'us', audio_ready: true }],
+    }]
+    if (path === '/word-items/item-1/pronunciation' && init?.method === 'PATCH') return { id: 'item-1', pronunciation_source: 'default', accent: 'uk', audio_ready: false }
+    throw new Error(`Unexpected API call: ${path}`)
+  })
+  render(<WordListEditor onConfirm={vi.fn()} />)
+
+  await user.selectOptions(await screen.findByLabelText('water 发音口音'), 'uk')
+
+  expect(api).toHaveBeenCalledWith('/word-items/item-1/pronunciation', expect.objectContaining({ method: 'PATCH', body: JSON.stringify({ pronunciation_source: 'default', accent: 'uk' }) }))
 })

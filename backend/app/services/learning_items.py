@@ -140,7 +140,7 @@ def enqueue_missing_tts_for_confirmed_items(session: Session) -> int:
         elif asset is not None and asset.provider == 'dictionary_audio':
             # Dictionary assets are versioned: re-fetch once per version bump.
             normalized = ' '.join(item.display_text.strip().split())
-            if asset.cache_key == dictionary_asset_cache_key(normalized, 'us', 'shared'):
+            if asset.cache_key == dictionary_asset_cache_key(normalized, item.accent or 'us', 'shared'):
                 continue
         else:
             expected_key = tts_cache_key(item.display_text, 'en-US', config.protocol, config.base_url, config.model, config.voice, config.speed)
