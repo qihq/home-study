@@ -46,11 +46,17 @@ def list_items(
     _user: Annotated[User, Depends(require_user)],
     status: Literal['unknown', 'mastered'] | None = None,
     item_type: Literal['word', 'phrase', 'sentence'] | None = None,
+    sort: Literal['recent', 'importance'] = 'recent',
 ) -> list[dict]:
+    from app.core.config import get_settings
+    from app.services.local_dictionary import LocalDictionary
+
+    dictionary = LocalDictionary(get_settings().local_dictionary_path)
     return [
         {'id': item.id, 'item_type': item.item_type, 'source_text': item.source_text,
-         'translation_text': item.translation_text, 'status': item.status}
-        for item in list_unknown_items(session, _current_child(session).id, status, item_type)
+         'translation_text': item.translation_text, 'status': item.status,
+         'word_tags': dictionary.word_info(item.source_text, item.source_language)[1]}
+        for item in list_unknown_items(session, _current_child(session).id, status, item_type, sort)
     ]
 
 

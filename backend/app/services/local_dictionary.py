@@ -8,6 +8,12 @@ from app.schemas.dictionary import DictionaryResult, PartOfSpeech
 
 
 POS_PREFIX = re.compile(r'^(n|v|vt|vi|adj|adv|prep|pron|conj|num|art|int|aux|abbr)\.\s*(.+)$', re.IGNORECASE)
+_ENGLISH_WORD = re.compile(r"[A-Za-z][A-Za-z'’-]*")
+
+_TAG_LABELS = {
+    'zk': '中考', 'gk': '高考', 'cet4': '四级', 'cet6': '六级',
+    'ky': '考研', 'toefl': '托福', 'ielts': '雅思', 'gre': 'GRE',
+}
 
 
 def _unique(values: list[str]) -> list[str]:
@@ -18,6 +24,44 @@ def _unique(values: list[str]) -> list[str]:
 class LocalLookup:
     result: DictionaryResult
     source: Literal['ecdict', 'cc-cedict']
+
+
+def _pos_items(pos_value: str | None) -> list[str]:
+    items = []
+    for entry in (pos_value or '').split('/'):
+        pos = entry.split(':', 1)[0].strip().lower()
+        if pos:
+            items.append(f'{pos}.')
+    return items
+
+
+def _parse_translations(translations: list[str], pos_value: str | None) -> tuple[list[PartOfSpeech], list[str]]:
+    parts: list[PartOfSpeech] = []
+    alternatives: list[str] = []
+    pos_items = _pos_items(pos_value)
+    for index, translation in enumerate(translations):
+        match = POS_PREFIX.match(translation)
+        if match:
+            parts.append(PartOfSpeech(part=f'{match.group(1).lower()}.', meaning=match.group(2).strip()))
+            continue
+        if index < len(pos_items):
+            parts.append(PartOfSpeech(part=pos_items[index], meaning=translation.strip()))
+            continue
+        alternatives.append(translation)
+    return parts, alternatives
+
+
+def _word_tags(row: sqlite3.Row) -> list[str]:
+    tags: list[str] = []
+    keys = row.keys()
+    if 'tag' in keys:
+        for token in (row['tag'] or '').split():
+            tags.append(_TAG_LABELS.get(token, token.upper()))
+    if 'collins' in keys and str(row['collins'] or '').strip() not in ('', '0'):
+        tags.append(f'柯林斯{row["collins"]}星')
+    if 'oxford' in keys and str(row['oxford'] or '').strip() in ('1', 'true'):
+        tags.append('牛津3000')
+    return tags[:10]
 
 
 class LocalDictionary:
@@ -41,6 +85,29 @@ class LocalDictionary:
             row = connection.execute("SELECT value FROM metadata WHERE key = 'version'").fetchone()
         return f"local:{row['value'] if row else 'unknown'}"
 
+    def word_info(self, text: str, source_language: Literal['en', 'zh']) -> tuple[int | None, list[str]]:
+        """Return (contemporary-frequency rank, word tags) for a single English word.
+
+        Lower rank means more frequent; ``None`` when the word is not in ECDICT.
+        """
+        if not self.available or source_language != 'en':
+            return None, []
+        word = ' '.join(text.strip().split()).casefold()
+        if not _ENGLISH_WORD.fullmatch(word):
+            return None, []
+        with self._connect() as connection:
+            row = connection.execute('SELECT * FROM ecdict WHERE word = ? COLLATE NOCASE', (word,)).fetchone()
+        if row is None:
+            return None, []
+        keys = row.keys()
+        rank = None
+        if 'frq' in keys:
+            try:
+                rank = int(row['frq'] or 0) or None
+            except ValueError:
+                rank = None
+        return rank, _word_tags(row)
+
     def lookup(self, text: str, source_language: Literal['en', 'zh']) -> LocalLookup | None:
         if not self.available:
             return None
@@ -61,20 +128,15 @@ class LocalDictionary:
             return None
         translations = _unique([line.strip() for line in (row['translation'] or '').replace('\\n', '\n').splitlines()])
         definitions = _unique([line.strip() for line in (row['definition'] or '').replace('\\n', '\n').splitlines()])
-        parts: list[PartOfSpeech] = []
-        alternatives: list[str] = []
-        for translation in translations:
-            match = POS_PREFIX.match(translation)
-            if match:
-                parts.append(PartOfSpeech(part=f'{match.group(1).lower()}.', meaning=match.group(2).strip()))
-            else:
-                alternatives.append(translation)
+        parts, alternatives = _parse_translations(translations, row['pos'] if 'pos' in row.keys() else None)
         primary = parts[0].meaning if parts else alternatives[0] if alternatives else definitions[0] if definitions else row['word']
         if not parts and alternatives and alternatives[0] == primary:
             alternatives = alternatives[1:]
+        phonetic = row['phonetic'] or None
         return LocalLookup(result=DictionaryResult(
             source_language='en', target_language='zh', item_type='word', source_text=row['word'],
-            primary_translation=primary, phonetic=row['phonetic'] or None, parts_of_speech=parts,
+            primary_translation=primary, phonetic=phonetic, phonetic_uk=phonetic, phonetic_us=None,
+            word_tags=_word_tags(row), parts_of_speech=parts,
             alternatives=alternatives[:8], examples=[], usage_note='\n'.join(definitions) if definitions else None,
         ), source='ecdict')
 

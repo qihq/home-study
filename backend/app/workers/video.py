@@ -29,7 +29,11 @@ def probe_video(path: Path) -> dict:
     info = json.loads(completed.stdout)
     stream_types = {stream['codec_type'] for stream in info.get('streams', [])}
     duration = float(info.get('format', {}).get('duration', 0))
-    if not {'video', 'audio'} <= stream_types or duration <= 0:
+    if 'video' not in stream_types:
+        raise MediaError('NO_VIDEO_TRACK')
+    if 'audio' not in stream_types:
+        raise MediaError('NO_AUDIO_TRACK')
+    if duration <= 0:
         raise MediaError('SOURCE_INVALID')
     return {'duration_ms': round(duration * 1000)}
 
@@ -135,9 +139,11 @@ def process_assemble_video(session: Session, recording_id: str, report_progress=
         recording.is_official = already_official is None
         enqueue_once(session, 'transcode_video', recording.id)
         session.commit()
-    except MediaError:
+    except MediaError as error:
         partial.unlink(missing_ok=True)
-        recording.status = 'assemble_failed'; session.commit()
+        recording.status = 'assemble_failed'
+        session.commit()
+        raise error
     finally:
         for path in temporary_epochs:
             path.unlink(missing_ok=True)
@@ -168,6 +174,8 @@ def process_transcode_video(session: Session, recording_id: str, report_progress
         target = transcode_recording(recording)
         report_progress(90)
         recording.compressed_path = str(target); recording.status = 'ready'
-    except MediaError:
+    except MediaError as error:
         recording.status = 'transcode_failed'
+        session.commit()
+        raise error
     session.commit()

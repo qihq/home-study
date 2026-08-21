@@ -85,3 +85,24 @@ it('offers regeneration for configured native pronunciation', async () => {
   await user.click(screen.getByText('发音设置'))
   expect(screen.getByRole('button', { name: '重新生成原生发音' })).toBeVisible()
 })
+
+it('streams sentence pronunciation and falls back to assets for words', async () => {
+  const user = userEvent.setup()
+  const createSession = vi.fn().mockResolvedValue({
+    id: 'session-s', speaker_profile_name_snapshot: null, voice_version_name_snapshot: null,
+    results: [{ id: 'result-s', word_item_id: 'item-s', audio_asset_id: 'asset-s', pronunciation_source: 'configured', item_type: 'sentence', result: 'unscored' }],
+  })
+  class FakeAudio {
+    static instances: string[] = []
+    addEventListener = vi.fn()
+    play = vi.fn()
+    constructor(url: string) { FakeAudio.instances.push(url) }
+  }
+  vi.stubGlobal('Audio', FakeAudio)
+  render(<DictationPage words={['I like apples.']} wordListVersionId="version-s" onScore={vi.fn()} onCreateSession={createSession} />)
+  await user.click(screen.getByRole('button', { name: '开始默写' }))
+  await user.click(screen.getByRole('button', { name: '播放发音' }))
+
+  expect(FakeAudio.instances[0]).toBe('/api/dictation-sessions/session-s/results/result-s/audio-stream')
+  vi.unstubAllGlobals()
+})

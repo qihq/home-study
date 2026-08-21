@@ -55,6 +55,30 @@ def test_cc_cedict_simplified_and_traditional_lookup(tmp_path):
     assert dictionary.lookup('不存在', 'zh') is None
 
 
+def test_extended_ecdict_schema_yields_tags_and_pos_pairing(tmp_path):
+    from app.services.local_dictionary import LocalDictionary
+
+    path = tmp_path / 'dictionary.sqlite3'
+    connection = sqlite3.connect(path)
+    connection.executescript("""
+        CREATE TABLE metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+        CREATE TABLE ecdict (word TEXT PRIMARY KEY, phonetic TEXT, translation TEXT, definition TEXT, pos TEXT, collins TEXT, oxford TEXT, tag TEXT, bnc TEXT, frq TEXT);
+        CREATE TABLE ecdict_aliases (alias TEXT PRIMARY KEY, word TEXT NOT NULL);
+        CREATE TABLE cedict (simplified TEXT, traditional TEXT, pinyin TEXT, definitions TEXT);
+        INSERT INTO metadata VALUES ('version', 'extended-v1');
+        INSERT INTO ecdict VALUES ('apple', '''æpl''', 'n. 苹果\\n苹果树', 'a round fruit', 'n:100/n:50', '3', '1', 'zk cet4', '8906', '6089');
+    """)
+    connection.commit(); connection.close()
+
+    result = LocalDictionary(path).lookup('apple', 'en').result
+
+    assert result.word_tags == ['中考', '四级', '柯林斯3星', '牛津3000']
+    assert [(part.part, part.meaning) for part in result.parts_of_speech] == [
+        ('n.', '苹果'), ('n.', '苹果树'),
+    ]
+    assert result.phonetic_uk == "'æpl'"
+
+
 def test_missing_dictionary_is_an_available_but_empty_provider(tmp_path):
     from app.services.local_dictionary import LocalDictionary
 

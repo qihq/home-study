@@ -1,6 +1,22 @@
 # 群晖 DS918+ 部署
 
-## 数据目录和启动
+## 一键部署/更新脚本（推荐）
+
+本地 Windows 机器执行（需 `docker` + `buildx` 与 `pip install paramiko`）：
+
+```powershell
+$env:NAS_SSH_PASSWORD='<admin密码>'   # 仅本次会话，不落盘、不写进脚本
+python scripts/deploy-nas.py --version v0.3.1
+```
+
+脚本自动完成：构建 `linux/amd64` 镜像 → `docker save` 导出 tar → 经 SSH 流式上传 → 优雅停/删旧容器 → 备份 `app.db*` 与密钥文件到 `backups/pre-upgrade-*` → `docker load` → **`docker-compose`（v1）** 重建容器 → 删除被顶替的旧镜像 → 轮询 `/api/health` 直到 `"worker":true`。
+
+- 已构建过镜像时可用 `--skip-build --tar dist/xxx.tar` 跳过构建复用 tar。
+- 更新后续部署只需改 `--version`。
+
+> **注意**：这台群晖的 Docker 没有 `docker compose` 插件（只有 `/usr/local/bin/docker-compose` v1），且 CLI 需 `sudo`（`admin` 密码）。脚本内部用 `echo <密码> | sudo -S docker-compose ...` 处理，未硬编码任何口令。
+
+## 数据目录和启动（手动方式）
 
 单容器发布包的 `compose.yaml` 使用一个数据卷：
 
@@ -8,25 +24,18 @@
 ${FAMILY_LEARNING_DATA_DIR:-./data}:/data
 ```
 
-因此，数据库、上传文件、视频、TTS 缓存、备份、AI/TTS 密钥和声音文件都应位于同一个 NAS 共享目录。单容器镜像会在同一容器内启动 API 和 Worker，不需要为 Worker 创建第二个容器或第二个目录映射。
+实机部署时数据目录即项目目录本身（`volumes: - ./:/data`），DB、上传、视频、TTS 缓存、备份、密钥、声音样本都在 `/volume1/docker/family-learning/` 下，单容器同时跑 API + Worker。
 
-1. 在 DSM 的 Container Manager 中启用 Docker Compose 项目功能。
-2. 创建 Container Manager 可读写的共享目录；DS918+ 可使用 `/volume1/family-learning`。
-3. 将项目上传到 NAS，在项目目录创建 `.env`：
-
-```dotenv
-FAMILY_LEARNING_DATA_DIR=/volume1/family-learning
-FAMILY_LEARNING_PORT=8000
-```
-
-4. 导入单容器发布包并启动项目：
+手动更新命令（在 `/volume1/docker/family-learning` 下、以 root 或 sudo 执行）：
 
 ```sh
-docker load -i family-learning-ds918plus-amd64-20260715-single.tar
-docker compose up -d
+docker-compose down
+docker load -i <版本>.tar
+docker-compose -f compose.yaml up -d --force-recreate
+curl http://127.0.0.1:6633/api/health   # 必须返回 "worker":true
 ```
 
-容器内数据目录固定为 `/data`，SQLite 地址为 `/data/app.db`。变更 `FAMILY_LEARNING_DATA_DIR` 前，先停止项目并完整迁移原数据目录；仅复制 `app.db` 不足以保留媒体、参考声音和密钥。
+历史手动命名容器 `family-learning-v2.5` 已由 compose 管理的 `family-learning-family-learning-1` 取代；后续不再出现端口冲突。
 
 ## HTTPS 和反向代理
 

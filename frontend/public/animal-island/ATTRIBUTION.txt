@@ -4,6 +4,9 @@ Source: https://github.com/guokaigdg/animal-island-ui
 License: Creative Commons Attribution-NonCommercial 4.0 International
 https://creativecommons.org/licenses/by-nc/4.0/
 
+skating.svg (snowflake icon) is an original asset drawn in the Animal Island UI
+style for this non-commercial family learning system.
+
 Dictionary data:
 - ECDICT by skywind3000, MIT License: https://github.com/skywind3000/ECDICT
 - CC-CEDICT, Creative Commons Attribution-ShareAlike 3.0:

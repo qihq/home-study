@@ -18,7 +18,7 @@ class MimoVoiceCloneClient:
     def synthesize(self, text: str, reference_wav: Path, instruction: str) -> bytes:
         payload = {
             'model': 'mimo-v2.5-tts-voiceclone',
-            'messages': spoken_messages(text, instruction),
+            'messages': spoken_messages(text, instruction, scenario='clone'),
             'audio': {'format': 'wav', 'voice': f'data:audio/wav;base64,{base64.b64encode(reference_wav.read_bytes()).decode()}'},
         }
         request = Request(

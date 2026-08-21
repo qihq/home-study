@@ -59,3 +59,22 @@ def test_stats_include_calendar_combined_rate_and_dual_language_streak(session) 
     assert stats['combined_rate'] == 6 / 24
     assert stats['current_dual_streak'] == 3
     assert stats['calendar'][-1] == {'date': '2026-07-12', 'chinese': True, 'english': True}
+
+
+def test_skating_recordings_do_not_count_toward_reading_stats(session) -> None:
+    from app.models.child import Child
+    from app.services.reading_stats import build_reading_stats
+
+    today = date(2026, 7, 12)
+    child = Child(display_name='孩子', slug='skating-stats-child', created_at=datetime(2026, 7, 1))
+    session.add(child); session.commit()
+    add_official_recording(session, child.id, today, 'skating')
+
+    stats = build_reading_stats(session, child.id, 'month', today)
+
+    assert stats['chinese']['completed_days'] == 0
+    assert stats['english']['completed_days'] == 0
+    assert stats['chinese']['duration_ms'] == 0
+    assert stats['english']['duration_ms'] == 0
+    assert stats['combined_rate'] == 0
+    assert stats['calendar'][-1] == {'date': '2026-07-12', 'chinese': False, 'english': False}

@@ -1,7 +1,8 @@
+export type RecordingLanguage = 'chinese' | 'english' | 'skating'
 export type PendingChunk = { recordingId: string; sequence: number; blob: Blob }
 export type RecordingSession = {
   recordingId: string
-  language: 'chinese' | 'english'
+  language: RecordingLanguage
   nextSequence: number
   ended: boolean
 }

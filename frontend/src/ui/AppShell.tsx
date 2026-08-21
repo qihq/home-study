@@ -30,6 +30,7 @@ const navigation: NavigationGroup[] = [
     destinations: [
       { label: "中文阅读", icon: "camera.svg" },
       { label: "英文阅读", icon: "chat.svg" },
+      { label: "花滑录制", icon: "skating.svg" },
       { label: "视频库", icon: "shopping.svg" },
     ],
   },

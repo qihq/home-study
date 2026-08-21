@@ -14,8 +14,8 @@ export function RecordingCalendar({ recordings, selectedDate, onSelectDate, onSh
   const initial = selectedDate ?? recordings.map(item => item.reading_date).sort().at(-1) ?? dateKey(new Date().getFullYear(), new Date().getMonth(), new Date().getDate())
   const [year, initialMonth] = initial.split('-').map(Number)
   const [visibleMonth, setVisibleMonth] = useState(() => new Date(year, initialMonth - 1, 1))
-  const counts = useMemo(() => recordings.reduce<Record<string, { chinese: number; english: number }>>((result, item) => {
-    const day = result[item.reading_date] ?? { chinese: 0, english: 0 }
+  const counts = useMemo(() => recordings.reduce<Record<string, { chinese: number; english: number; skating: number }>>((result, item) => {
+    const day = result[item.reading_date] ?? { chinese: 0, english: 0, skating: 0 }
     day[item.language_type] += 1
     result[item.reading_date] = day
     return result
@@ -44,10 +44,10 @@ export function RecordingCalendar({ recordings, selectedDate, onSelectDate, onSh
         const day = index + 1
         const key = dateKey(currentYear, currentMonth, day)
         const count = counts[key]
-        const details = [count?.chinese ? `中文${count.chinese}个` : '', count?.english ? `英文${count.english}个` : ''].filter(Boolean).join('，')
+        const details = [count?.chinese ? `中文${count.chinese}个` : '', count?.english ? `英文${count.english}个` : '', count?.skating ? `花滑${count.skating}个` : ''].filter(Boolean).join('，')
         const label = `${currentYear}年${currentMonth + 1}月${day}日${details ? `，${details}` : '，没有视频'}`
         return <button key={key} aria-label={label} aria-pressed={selectedDate === key} className={`${count ? 'has-recording' : ''} ${selectedDate === key ? 'is-selected' : ''} ${todayKey === key ? 'is-today' : ''}`} onClick={() => onSelectDate(key)}>
-          <span>{day}</span><small>{count?.chinese ? <i className="calendar-dot chinese">中</i> : null}{count?.english ? <i className="calendar-dot english">英</i> : null}</small>
+          <span>{day}</span><small>{count?.chinese ? <i className="calendar-dot chinese">中</i> : null}{count?.english ? <i className="calendar-dot english">英</i> : null}{count?.skating ? <i className="calendar-dot skating">滑</i> : null}</small>
         </button>
       })}
     </div>

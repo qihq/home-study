@@ -1,3 +1,4 @@
+import re
 from time import monotonic
 from typing import Annotated
 
@@ -19,10 +20,14 @@ from app.services.ai_config import (
     present_spelling_ocr_config, save_ai_config, save_spelling_ocr_config, spelling_ocr_provider,
 )
 from app.services.openai_chat import OpenAiChatClient, OpenAiChatError
+from app.services.mimo_speech import CHINESE_VOICES, DEFAULT_VOICE, DEFAULT_ZH_VOICE, ENGLISH_VOICES
 from app.services.mimo_tts import MimoTtsClient, MimoTtsError
 from app.services.openai_tts import OpenAiTtsClient, OpenAiTtsError
 
 router = APIRouter(tags=['settings'])
+
+OFFICIAL_MIMO_BASE = 'https://api.xiaomimimo.com'
+DEPRECATED_MIMO_MODEL = re.compile(r'^mimo-v2(?!\.5-)')
 
 
 class TtsConfigPayload(BaseModel):
@@ -31,6 +36,7 @@ class TtsConfigPayload(BaseModel):
     api_key: str | None = Field(default=None, max_length=1000)
     model: str = Field(min_length=1, max_length=200)
     voice: str = Field(min_length=1, max_length=200)
+    voice_zh: str | None = Field(default=None, max_length=200)
     speed: float = Field(ge=0.5, le=2.0)
     pronunciation_source: str = Field(default='configured', pattern='^(configured|custom)$')
     voice_version_id: str | None = None
@@ -61,8 +67,8 @@ class SpellingOcrConfigPayload(BaseModel):
 
 def present_tts_config(config):
     if config is None:
-        return {'protocol': 'mimo', 'base_url': 'https://api.xiaomimimo.com/v1', 'model': 'mimo-v2.5-tts', 'voice': 'Chloe', 'speed': 1.0, 'pronunciation_source': 'configured', 'voice_version_id': None, 'api_key_configured': False, 'api_key_mask': None}
-    return {'protocol': config.protocol, 'base_url': config.base_url, 'model': config.model, 'voice': config.voice, 'speed': config.speed, 'pronunciation_source': config.pronunciation_source, 'voice_version_id': config.voice_version_id, 'api_key_configured': bool(config.api_key_encrypted), 'api_key_mask': mask_key(api_key(config))}
+        return {'protocol': 'mimo', 'base_url': 'https://api.xiaomimimo.com/v1', 'model': 'mimo-v2.5-tts', 'voice': 'Chloe', 'voice_zh': DEFAULT_ZH_VOICE, 'speed': 1.0, 'pronunciation_source': 'configured', 'voice_version_id': None, 'api_key_configured': False, 'api_key_mask': None}
+    return {'protocol': config.protocol, 'base_url': config.base_url, 'model': config.model, 'voice': config.voice, 'voice_zh': config.voice_zh or DEFAULT_ZH_VOICE, 'speed': config.speed, 'pronunciation_source': config.pronunciation_source, 'voice_version_id': config.voice_version_id, 'api_key_configured': bool(config.api_key_encrypted), 'api_key_mask': mask_key(api_key(config))}
 
 
 @router.get('/settings/tts')
@@ -79,7 +85,20 @@ def update_tts(payload: TtsConfigPayload, session: DbSession, user: Annotated[Us
             raise HTTPException(409, detail={'code': 'VOICE_VERSION_NOT_READY', 'message': 'Selected cloned voice is unavailable'})
         speaker = session.get(SpeakerProfile, voice.speaker_profile_id)
         require_resource_owner(session, speaker.owner_user_id if speaker else None, user)
-    config = save_tts_config(session, protocol=payload.protocol, base_url=str(payload.base_url).rstrip('/'), api_key_value=payload.api_key, model=payload.model, voice=payload.voice, speed=payload.speed, pronunciation_source=payload.pronunciation_source, voice_version_id=payload.voice_version_id)
+    base_url = str(payload.base_url).rstrip('/')
+    if payload.protocol == 'mimo' and base_url.startswith(OFFICIAL_MIMO_BASE):
+        if DEPRECATED_MIMO_MODEL.match(payload.model):
+            raise HTTPException(422, detail={'code': 'TTS_MODEL_DEPRECATED', 'message': 'MiMo V2 系列模型已于 2026-06-30 下线，请改用 mimo-v2.5 系列模型名。'})
+        if not payload.model.startswith('mimo-v2.5-'):
+            raise HTTPException(422, detail={'code': 'TTS_MODEL_UNKNOWN', 'message': 'MiMo 官方接口仅支持 mimo-v2.5 系列 TTS 模型。'})
+        if payload.voice not in (*ENGLISH_VOICES, DEFAULT_VOICE):
+            raise HTTPException(422, detail={'code': 'TTS_VOICE_INVALID', 'message': '英文音色无效，请从 MiMo 官方音色中选择。'})
+        voice_zh = (payload.voice_zh or '').strip()
+        if voice_zh and voice_zh not in (*CHINESE_VOICES, DEFAULT_VOICE):
+            raise HTTPException(422, detail={'code': 'TTS_VOICE_INVALID', 'message': '中文音色无效，请从 MiMo 官方音色中选择。'})
+    else:
+        voice_zh = (payload.voice_zh or '').strip()
+    config = save_tts_config(session, protocol=payload.protocol, base_url=base_url, api_key_value=payload.api_key, model=payload.model, voice=payload.voice, speed=payload.speed, pronunciation_source=payload.pronunciation_source, voice_version_id=payload.voice_version_id, voice_zh=voice_zh)
     return {**present_tts_config(config), 'queued_item_count': enqueue_missing_tts_for_confirmed_items(session)}
 
 
@@ -92,7 +111,7 @@ def test_tts_connection(payload: TtsConfigPayload, session: DbSession, _user: An
     started = monotonic()
     try:
         if payload.protocol == 'mimo':
-            audio = MimoTtsClient(secret, str(payload.base_url), payload.model, payload.voice).synthesize('Hello')
+            audio = MimoTtsClient(secret, str(payload.base_url), payload.model, payload.voice, payload.speed).synthesize('Hello')
         else:
             audio = OpenAiTtsClient(secret, str(payload.base_url), payload.model, payload.voice, payload.speed).synthesize('Hello')
     except (MimoTtsError, OpenAiTtsError) as error:

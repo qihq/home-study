@@ -107,11 +107,29 @@ it('uploads a video for the date and language selected by the parent', async () 
 
   await user.click(screen.getByRole('button', { name: '上传视频' }))
   fireEvent.change(screen.getByLabelText('阅读日期'), { target: { value: '2026-07-18' } })
-  await user.selectOptions(screen.getByLabelText('阅读类型'), 'english')
+  await user.selectOptions(screen.getByLabelText('视频类别'), 'english')
   const file = new File(['video'], 'family.mp4', { type: 'video/mp4' })
   fireEvent.change(screen.getByLabelText('选择视频'), { target: { files: [file] } })
   fireEvent.submit(screen.getByRole('button', { name: '上传到影像馆' }).closest('form')!)
 
   await waitFor(() => expect(onUpload).toHaveBeenCalledWith({ file, readingDate: '2026-07-18', languageType: 'english' }))
   expect(await screen.findByRole('status')).toHaveTextContent('上传完成')
+})
+
+it('labels and uploads skating videos under the new category', async () => {
+  const user = userEvent.setup()
+  const onUpload = vi.fn().mockResolvedValue(undefined)
+  render(<VideoLibrary recordings={[
+    { id: 'skating-1', reading_date: '2026-08-19', language_type: 'skating', status: 'ready', is_official: true, duration_ms: 60000, download_ready: true },
+  ]} onUpload={onUpload} />)
+
+  expect(screen.getByText('花滑录制')).toBeVisible()
+  expect(screen.getByText('花滑录制 · 2026-08-19')).toBeVisible()
+
+  await user.click(screen.getByRole('button', { name: '上传视频' }))
+  await user.selectOptions(screen.getByLabelText('视频类别'), 'skating')
+  fireEvent.change(screen.getByLabelText('选择视频'), { target: { files: [new File(['video'], 'spin.mp4', { type: 'video/mp4' })] } })
+  fireEvent.submit(screen.getByRole('button', { name: '上传到影像馆' }).closest('form')!)
+
+  await waitFor(() => expect(onUpload).toHaveBeenCalledWith(expect.objectContaining({ languageType: 'skating' })))
 })

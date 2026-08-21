@@ -3,10 +3,12 @@ from hashlib import sha256
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import select
 
 from app.api.deps import DbSession, require_resource_owner, require_user
+from app.api.tts import WAV_STREAM_HEADER
 from app.models.child import Child
 from app.models.dictation import DictationResult, DictationSession
 from app.models.learning_item_audio import LearningItemAudio
@@ -18,7 +20,10 @@ from app.models.speaker import SpeakerProfile, VoiceVersion
 from app.services.dictation import score_result, start_dictation
 from app.services.dictation_stats import create_review_list
 from app.services.jobs import enqueue_once
+from app.services.mimo_speech import detect_language, resolve_voice
+from app.services.mimo_tts import MimoTtsClient, MimoTtsError
 from app.services.speakers import cache_learning_item_audio
+from app.services.tts_config import api_key, get_tts_config
 from app.workers.voice import generate_text_with_voice
 from app.workers.tts import regenerate_configured_item_tts
 
@@ -206,6 +211,41 @@ def update_result_pronunciation(
                 asset.path = str(path)
     session.commit()
     return {'pronunciation_source': 'custom', 'audio_asset_id': asset_id, 'regenerated': payload.regenerate}
+
+
+@router.get('/dictation-sessions/{session_id}/results/{result_id}/audio-stream')
+def stream_result_audio(
+    session_id: str, result_id: str,
+    session: DbSession, user: Annotated[User, Depends(require_user)],
+) -> StreamingResponse:
+    """Low-latency streaming playback for sentence/phrase dictation items."""
+    record = session.get(DictationSession, session_id)
+    result = session.get(DictationResult, result_id)
+    if record is None or result is None or result.session_id != record.id:
+        raise HTTPException(404, detail={'code': 'DICTATION_RESULT_NOT_FOUND', 'message': 'Dictation result not found'})
+    item = session.get(WordItem, result.word_item_id)
+    if item is None:
+        raise HTTPException(404, detail={'code': 'WORD_ITEM_NOT_FOUND', 'message': 'Word item not found'})
+    if item.item_type == 'word':
+        raise HTTPException(409, detail={'code': 'DICTATION_STREAM_WORDS_UNSUPPORTED', 'message': '单词发音请使用词典音频源。'})
+    config = get_tts_config(session)
+    if config is None or not config.api_key_encrypted:
+        raise HTTPException(409, detail={'code': 'TTS_NOT_CONFIGURED', 'message': '英语发音服务未配置'})
+    if config.protocol != 'mimo':
+        raise HTTPException(409, detail={'code': 'TTS_STREAM_UNSUPPORTED', 'message': '当前协议不支持流式朗读'})
+    language = item.source_language if item.source_language in ('en', 'zh') else detect_language(item.display_text)
+    voice = resolve_voice(config.voice, config.voice_zh, language)
+    client = MimoTtsClient(api_key(config), config.base_url, config.model, voice, config.speed)
+
+    def generate():
+        yield WAV_STREAM_HEADER
+        try:
+            for chunk in client.stream(item.display_text):
+                yield chunk
+        except MimoTtsError:
+            return
+
+    return StreamingResponse(generate(), media_type='audio/wav')
 
 
 @router.get('/dictation/latest-in-progress')

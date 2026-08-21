@@ -8,6 +8,7 @@ type DictationResult = {
   result?: 'correct' | 'incorrect' | 'unscored'
   revealed?: boolean
   word_item_id?: string
+  item_type?: 'word' | 'phrase' | 'sentence'
   pronunciation_source?: 'default' | 'configured' | 'custom'
 }
 
@@ -96,6 +97,17 @@ export function DictationPage({ words, wordListVersionId, resumeSessionId, onSco
   }
 
   function play() {
+    if (sessionId && current?.id && current.item_type && current.item_type !== 'word' && current.pronunciation_source !== 'custom') {
+      // Sentences and phrases stream from the MiMo low-latency endpoint;
+      // fall back to the cached asset when streaming is unavailable.
+      const stream = new Audio(`/api/dictation-sessions/${sessionId}/results/${current.id}/audio-stream`)
+      stream.addEventListener('error', () => {
+        const id = current?.audio_asset_id
+        if (id) void new Audio(`/api/tts-assets/${id}/audio?v=${audioRevision}`).play()
+      })
+      void stream.play()
+      return
+    }
     const id = current?.audio_asset_id
     if (id) void new Audio(`/api/tts-assets/${id}/audio?v=${audioRevision}`).play()
   }

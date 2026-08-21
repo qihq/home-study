@@ -11,6 +11,7 @@ from app.services.jobs import enqueue_once
 from app.services.tts_config import api_key, get_tts_config
 
 VOICE_AUDIO_VERSION = 3
+VOICE_PREVIEW_TEXT = '你好！这是家庭学习的声音预览。This is a voice preview for family learning.'
 
 
 def _mimo_credentials(session: Session) -> tuple[str, str] | None:
@@ -65,7 +66,7 @@ def process_voice_preview(session: Session, voice_version_id: str, report_progre
     try:
         report_progress(60)
         audio = MimoVoiceCloneClient(*credentials).synthesize(
-            'This is a voice preview for family learning.', Path(voice.reference_audio_path), voice.style_instruction,
+            VOICE_PREVIEW_TEXT, Path(voice.reference_audio_path), voice.style_instruction,
         )
         report_progress(85)
         partial.write_bytes(audio)

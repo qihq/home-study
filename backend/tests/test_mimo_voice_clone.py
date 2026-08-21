@@ -32,10 +32,37 @@ def test_voice_clone_sends_reference_audio_as_data_uri(monkeypatch, tmp_path) ->
     assert b'"voice":"data:audio/wav;base64,d2F2LWJ5dGVz"' in captured['payload']
     payload = json.loads(captured['payload'])
     assert payload['messages'] == [
-        {'role': 'user', 'content': 'Read clearly\nSpeak only the assistant content once.'},
+        {'role': 'user', 'content': 'Read clearly'},
         {'role': 'assistant', 'content': 'apple'},
     ]
     assert 'translate' not in str(payload['messages']).lower()
+
+
+def test_voice_clone_keeps_user_message_empty_without_style_instruction(monkeypatch, tmp_path) -> None:
+    from app.services.mimo_voice_clone import MimoVoiceCloneClient
+
+    sample = tmp_path / 'sample.wav'
+    sample.write_bytes(b'wav-bytes')
+    captured = {}
+
+    def fake_urlopen(request, timeout):
+        captured['payload'] = request.data
+        class Response:
+            def read(self):
+                return ('{"choices":[{"message":{"audio":{"data":"' + base64.b64encode(b'preview').decode() + '"}}}]}').encode()
+            def __enter__(self): return self
+            def __exit__(self, *_): return False
+        return Response()
+
+    monkeypatch.setattr('app.services.mimo_voice_clone.urlopen', fake_urlopen)
+
+    MimoVoiceCloneClient('test-key', 'https://api.example/v1').synthesize('apple', sample, '')
+
+    payload = json.loads(captured['payload'])
+    assert payload['messages'] == [
+        {'role': 'user', 'content': ''},
+        {'role': 'assistant', 'content': 'apple'},
+    ]
 
 
 def test_voice_preview_marks_version_ready(monkeypatch, session, tmp_path) -> None:

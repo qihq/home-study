@@ -52,13 +52,14 @@ def mask_key(key: str | None) -> str | None:
     return f'********{key[-4:]}' if len(key) >= 4 else '********'
 
 
-def save_tts_config(session: Session, *, protocol: str, base_url: str, api_key_value: str | None, model: str, voice: str, speed: float, pronunciation_source: str = 'configured', voice_version_id: str | None = None) -> TtsProviderConfig:
+def save_tts_config(session: Session, *, protocol: str, base_url: str, api_key_value: str | None, model: str, voice: str, speed: float, pronunciation_source: str = 'configured', voice_version_id: str | None = None, voice_zh: str = '') -> TtsProviderConfig:
     config = get_tts_config(session)
     if config is None:
         config = TtsProviderConfig(id=1, protocol=protocol, base_url=base_url, model=model, voice=voice, speed=speed)
         session.add(config)
     else:
         config.protocol, config.base_url, config.model, config.voice, config.speed = protocol, base_url, model, voice, speed
+    config.voice_zh = voice_zh
     if api_key_value:
         config.api_key_encrypted = _encrypt(api_key_value)
     config.pronunciation_source = pronunciation_source

@@ -15,8 +15,13 @@ class Settings(BaseSettings):
     mimo_api_base_url: str | None = 'https://api.xiaomimimo.com/v1'
     mimo_tts_model: str | None = 'mimo-v2.5-tts'
     mimo_tts_voice: str | None = 'Chloe'
+    mimo_tts_voice_zh: str | None = '冰糖'
     mimo_tts_speed: float = 1.0
     local_dictionary_path: Path = Path('/app/dictionary/local-dictionary.sqlite3')
+    tts_max_assets: int = 5_000
+    dictionary_auto_update: bool = True
+    dictionary_update_interval_days: int = 7
+    dictionary_builder_path: str = '/app/backend/scripts/build_local_dictionary.py'
 
     @property
     def uploads_dir(self) -> Path:

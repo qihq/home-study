@@ -54,6 +54,41 @@ it("groups mobile navigation into four clear entries and keeps settings reachabl
   expect(onNavigate).toHaveBeenCalledWith("设置");
 });
 
+it("shows real weekly rate and streak on the home screen", async () => {
+  const user = userEvent.setup();
+  const mockedApi = vi.mocked(api);
+  const iso = (offsetDays: number) => {
+    const day = new Date();
+    day.setDate(day.getDate() + offsetDays);
+    const pad = (value: number) => String(value).padStart(2, "0");
+    return `${day.getFullYear()}-${pad(day.getMonth() + 1)}-${pad(day.getDate())}`;
+  };
+  mockedApi.mockImplementation(async (path) => {
+    if (path === "/recordings") return [];
+    if (path === "/stats/reading?period=week")
+      return {
+        combined_rate: 0.5,
+        current_dual_streak: 2,
+        longest_dual_streak: 2,
+        chinese: { duration_ms: 0 },
+        english: { duration_ms: 0 },
+        calendar: [
+          { date: iso(-2), chinese: true, english: true },
+          { date: iso(-1), chinese: true, english: true },
+          { date: iso(0), chinese: false, english: false },
+        ],
+      };
+    throw new Error(`Unexpected API call: ${path}`);
+  });
+
+  render(<App />);
+  await user.click(await screen.findByRole("button", { name: "登录" }));
+
+  expect(await screen.findByText("连续打卡")).toBeVisible();
+  expect(screen.getByText("连续打卡").closest("article")?.querySelector("strong")).toHaveTextContent("2 天");
+  expect(screen.getByText("本周完成率").closest("article")?.querySelector("strong")).toHaveTextContent("50%");
+});
+
 const ttsConfig = {
   protocol: "mimo" as const,
   base_url: "https://tts.example/v1",
@@ -135,14 +170,14 @@ it("wires the dictionary and AI settings pages to their API endpoints", async ()
   await user.click(screen.getByRole("button", { name: "播放发音" }));
   expect(mockedApi).toHaveBeenCalledWith("/dictionary/entries/entry-1/audio", {
     method: "POST",
-    body: JSON.stringify({ voice_version_id: "voice-1" }),
+    body: JSON.stringify({ voice_version_id: "voice-1", accent: "us" }),
   });
   expect(mockedApiAudio).toHaveBeenCalledWith("/tts-assets/asset-1/audio");
 
   await user.click(screen.getAllByRole("button", { name: "设置" })[0]);
-  expect(
-    await screen.findByRole("heading", { name: "电子辞典 AI" }),
-  ).toBeVisible();
+  const aiPanel = (
+    await screen.findByRole("heading", { name: "电子辞典 AI" })
+  ).closest("article") as HTMLElement;
   await user.type(screen.getByLabelText("AI API Key"), "replacement-secret");
   await user.click(screen.getByRole("button", { name: "保存 AI 配置" }));
   expect(mockedApi).toHaveBeenCalledWith(
@@ -153,7 +188,7 @@ it("wires the dictionary and AI settings pages to their API endpoints", async ()
     }),
   );
   expect(screen.getByLabelText("AI API Key")).toHaveValue("");
-  await user.click(screen.getByRole("button", { name: "测试连接" }));
+  await user.click(within(aiPanel).getByRole("button", { name: "测试连接" }));
   expect(mockedApi).toHaveBeenCalledWith("/settings/ai/test", {
     method: "POST",
   });
@@ -165,7 +200,7 @@ it("opens the unknown-items page from the dictionary and creates a learning list
   mockedApi.mockImplementation(async (path: string) => {
     if (path === "/setup/status") return { needs_initial_admin: false };
     if (path === "/voice-versions?ready=true") return [];
-    if (path === "/unknown-items?status=unknown")
+    if (path === "/unknown-items?status=unknown&sort=recent")
       return [
         {
           id: "unknown-1",

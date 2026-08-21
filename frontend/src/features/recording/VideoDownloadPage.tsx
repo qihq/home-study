@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Button } from '../../ui/Button'
+import { RecordingLanguage } from '../../lib/recordingStore'
 
 export type VideoDownloadItem = {
   id: string
   title: string
   readingDate: string
-  languageType: 'chinese' | 'english'
+  languageType: RecordingLanguage
   fileName: string
 }
 
@@ -140,7 +141,7 @@ export function VideoDownloadPage({ item, onHome, onBackToVideos }: {
     <article className={`video-download-card ${state === 'ready' || state === 'sharing' ? 'is-ready' : ''}`}>
       <img className="video-download-companion" src="/animal-island/animal-icon.png" alt="小岛伙伴正在打包视频" />
       <div className="video-download-details">
-        <p className="video-download-language">{item.languageType === 'chinese' ? '中文阅读' : '英文阅读'} · {item.readingDate}</p>
+        <p className="video-download-language">{item.languageType === 'chinese' ? '中文阅读' : item.languageType === 'english' ? '英文阅读' : '花滑录制'} · {item.readingDate}</p>
         <h2>{state === 'ready' ? '视频已经准备好' : state === 'sharing' ? '等待存入照片' : state === 'error' ? '这次快递没送到' : state === 'cancelled' ? '下载已取消' : '正在打包视频'}</h2>
         <div className={`video-download-progress ${total ? '' : 'is-indeterminate'}`} role="progressbar" aria-label="视频下载进度" aria-valuemin={0} aria-valuemax={100} aria-valuenow={percent ?? undefined}>
           <span style={percent === null ? undefined : { width: `${percent}%` }} />

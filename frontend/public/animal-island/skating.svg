@@ -1,0 +1,28 @@
+<svg width="96" height="96" viewBox="0 0 96 96" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <g fill="#B3D9F2">
+    <g>
+      <rect x="41" y="8" width="14" height="80" rx="7"/>
+      <rect x="54" y="30" width="20" height="12" rx="6"/>
+      <rect x="22" y="30" width="20" height="12" rx="6"/>
+      <rect x="54" y="58" width="20" height="12" rx="6"/>
+      <rect x="22" y="58" width="20" height="12" rx="6"/>
+    </g>
+    <g transform="rotate(60 48 48)">
+      <rect x="41" y="8" width="14" height="80" rx="7"/>
+      <rect x="54" y="30" width="20" height="12" rx="6"/>
+      <rect x="22" y="30" width="20" height="12" rx="6"/>
+      <rect x="54" y="58" width="20" height="12" rx="6"/>
+      <rect x="22" y="58" width="20" height="12" rx="6"/>
+    </g>
+    <g transform="rotate(120 48 48)">
+      <rect x="41" y="8" width="14" height="80" rx="7"/>
+      <rect x="54" y="30" width="20" height="12" rx="6"/>
+      <rect x="22" y="30" width="20" height="12" rx="6"/>
+      <rect x="54" y="58" width="20" height="12" rx="6"/>
+      <rect x="22" y="58" width="20" height="12" rx="6"/>
+    </g>
+  </g>
+  <circle cx="48" cy="48" r="16" fill="#4C3C33"/>
+  <circle cx="48" cy="48" r="9" fill="#F9F6E5"/>
+  <circle cx="48" cy="48" r="3.6" fill="#B3D9F2"/>
+</svg>

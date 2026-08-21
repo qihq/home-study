@@ -14,7 +14,7 @@ from app.services.recordings import ChunkConflict, create_recording, delete_reco
 from app.services.jobs import enqueue_once, reset_failed_job
 
 router = APIRouter(tags=['recordings'])
-class CreateRecording(BaseModel): language_type: Literal['chinese','english']
+class CreateRecording(BaseModel): language_type: Literal['chinese','english','skating']
 class CompleteRecording(BaseModel): final_chunk_count: int = Field(ge=0, le=10000)
 class UpdateRecording(BaseModel): title: str | None = Field(default=None, max_length=160)
 
@@ -34,7 +34,7 @@ async def upload_recording(
     _user: Annotated[User, Depends(require_user)],
     file: UploadFile = File(...),
     reading_date: date = Form(...),
-    language_type: Literal['chinese', 'english'] = Form(...),
+    language_type: Literal['chinese', 'english', 'skating'] = Form(...),
 ) -> dict:
     content_type = (file.content_type or '').lower()
     if not content_type.startswith('video/'):
@@ -71,12 +71,21 @@ async def upload_recording(
 @router.get('/recordings')
 def list_recordings(session: DbSession, _user: Annotated[User, Depends(require_user)]) -> list[dict]:
     records = session.scalars(select(Recording).order_by(Recording.created_at.desc())).all()
+    from app.models.job import Job
+    failed_jobs = session.scalars(select(Job).where(
+        Job.status == 'failed',
+        Job.type.in_(['assemble_video', 'transcode_video']),
+    ).order_by(Job.created_at.desc())).all()
+    failure_by_entity: dict[str, str] = {}
+    for job in failed_jobs:
+        failure_by_entity.setdefault(job.entity_id, job.error_code)
     return [
         {
             'id': record.id, 'reading_date': record.reading_date.isoformat(), 'language_type': record.language_type,
             'title': record.title,
             'status': record.status, 'is_official': record.is_official,
             'duration_ms': record.verified_duration_ms, 'download_ready': record.status == 'ready' and bool(record.compressed_path),
+            'failure_code': failure_by_entity.get(record.id),
         }
         for record in records
     ]

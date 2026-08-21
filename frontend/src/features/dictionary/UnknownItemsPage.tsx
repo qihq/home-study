@@ -7,9 +7,10 @@ export type UnknownItem = {
   source_text: string
   translation_text: string
   status: 'unknown' | 'mastered'
+  word_tags?: string[]
 }
 
-type Filters = { status: 'unknown' | 'mastered'; item_type: 'all' | UnknownItem['item_type'] }
+type Filters = { status: 'unknown' | 'mastered'; item_type: 'all' | UnknownItem['item_type']; sort: 'recent' | 'importance' }
 type GeneratedItem = { display_text: string; item_type: UnknownItem['item_type']; translation_text?: string | null }
 type GeneratedList = { id: string; title: string; status: string; created_at: string; items: GeneratedItem[]; word_list_version_id?: string | null }
 type MainTab = 'items' | 'generated'
@@ -24,7 +25,7 @@ export function UnknownItemsPage({ onLoad, onUpdateStatus, onCreateLearningList,
   onDelete?: (id: string) => Promise<void>
 }) {
   const [mainTab, setMainTab] = useState<MainTab>('items')
-  const [filters, setFilters] = useState<Filters>({ status: 'unknown', item_type: 'all' })
+  const [filters, setFilters] = useState<Filters>({ status: 'unknown', item_type: 'all', sort: 'recent' })
   const [items, setItems] = useState<UnknownItem[]>([])
   const [selected, setSelected] = useState<string[]>([])
   const [title, setTitle] = useState(`生词复习 · ${new Date().toLocaleDateString('zh-CN', { month: '2-digit', day: '2-digit' })}`)
@@ -45,7 +46,7 @@ export function UnknownItemsPage({ onLoad, onUpdateStatus, onCreateLearningList,
     } catch { setMessage('加载生成的学习本失败，请稍后重试。') }
   }
 
-  useEffect(() => { void load() }, [filters.status, filters.item_type])
+  useEffect(() => { void load() }, [filters.status, filters.item_type, filters.sort])
   useEffect(() => { if (mainTab === 'generated') void loadGenerated() }, [mainTab])
 
   const setFilter = <K extends keyof Filters>(key: K, value: Filters[K]) => setFilters(current => ({ ...current, [key]: value }))
@@ -92,9 +93,9 @@ export function UnknownItemsPage({ onLoad, onUpdateStatus, onCreateLearningList,
     <div className="island-tabs" role="tablist" aria-label="生词本功能"><button type="button" role="tab" aria-selected={mainTab === 'items'} onClick={() => setMainTab('items')}>生词</button><button type="button" role="tab" aria-selected={mainTab === 'generated'} onClick={() => setMainTab('generated')}>生成的学习本</button></div>
     {message && <p role="status">{message}</p>}
     {mainTab === 'items' && <section className="unknown-items-panel" role="tabpanel">
-      <div className="unknown-filters"><label>状态筛选<select aria-label="状态筛选" value={filters.status} onChange={event => setFilter('status', event.target.value as Filters['status'])}><option value="unknown">不认识</option><option value="mastered">已掌握</option></select></label><label>类型筛选<select aria-label="类型筛选" value={filters.item_type} onChange={event => setFilter('item_type', event.target.value as Filters['item_type'])}><option value="all">全部类型</option><option value="word">单词</option><option value="phrase">短语</option><option value="sentence">句子</option></select></label><p>{items.length} 条结果</p></div>
+      <div className="unknown-filters"><label>状态筛选<select aria-label="状态筛选" value={filters.status} onChange={event => setFilter('status', event.target.value as Filters['status'])}><option value="unknown">不认识</option><option value="mastered">已掌握</option></select></label><label>类型筛选<select aria-label="类型筛选" value={filters.item_type} onChange={event => setFilter('item_type', event.target.value as Filters['item_type'])}><option value="all">全部类型</option><option value="word">单词</option><option value="phrase">短语</option><option value="sentence">句子</option></select></label><label>排序<select aria-label="排序" value={filters.sort} onChange={event => setFilter('sort', event.target.value as Filters['sort'])}><option value="recent">最近添加</option><option value="importance">词频优先</option></select></label><p>{items.length} 条结果</p></div>
       {selected.length > 0 && <div className="unknown-primary-action"><span>已选 {selected.length} 条</span><label>学习本名称<input aria-label="学习本名称" value={title} onChange={event => setTitle(event.target.value)} /></label><Button onClick={() => void createList()}>生成学习本（{selected.length}）</Button><Button variant="secondary" onClick={() => setSelected([])}>取消选择</Button></div>}
-      <div className="unknown-item-grid">{items.map(item => <article key={item.id}><label className="unknown-select"><input aria-label={`选择 ${item.source_text}`} type="checkbox" checked={selected.includes(item.id)} onChange={() => toggle(item.id)} /> 选择</label><p className="unknown-item-type">{item.item_type}</p><h2>{item.source_text}</h2><p>{item.translation_text}</p><div className="unknown-card-actions"><button onClick={() => void updateStatus(item)}>{item.status === 'unknown' ? '标记已掌握' : '恢复不认识'}</button><button aria-label={`删除 ${item.source_text}`} onClick={() => void remove(item)}>删除</button></div></article>)}</div>
+      <div className="unknown-item-grid">{items.map(item => <article key={item.id}><label className="unknown-select"><input aria-label={`选择 ${item.source_text}`} type="checkbox" checked={selected.includes(item.id)} onChange={() => toggle(item.id)} /> 选择</label><p className="unknown-item-type">{item.item_type}</p><h2>{item.source_text}</h2>{item.word_tags && item.word_tags.length > 0 && <div className="word-tags">{item.word_tags.map(tag => <span key={tag} className="word-tag">{tag}</span>)}</div>}<p>{item.translation_text}</p><div className="unknown-card-actions"><button onClick={() => void updateStatus(item)}>{item.status === 'unknown' ? '标记已掌握' : '恢复不认识'}</button><button aria-label={`删除 ${item.source_text}`} onClick={() => void remove(item)}>删除</button></div></article>)}</div>
     </section>}
     {mainTab === 'generated' && <section className="generated-learning-panel" role="tabpanel">
       {generatedLists.length === 0 ? <div className="learning-book-empty"><img src="/animal-island/diy.svg" alt="" /><h2>还没有生成的学习本</h2><p>从生词里选择内容后就会出现在这里。</p><Button onClick={() => setMainTab('items')}>去选择生词</Button></div> : <><div className="generated-list-tabs" role="tablist" aria-label="生成的学习本列表">{generatedLists.map(list => <button key={list.id} type="button" role="tab" aria-selected={activeList?.id === list.id} onClick={() => setActiveGeneratedId(list.id)}>{list.title}<small>{list.items.length} 条</small></button>)}</div>{activeList && <article className="generated-learning-card"><div><p className="date">{new Date(activeList.created_at).toLocaleDateString('zh-CN')}</p><h2>{activeList.title}</h2><p>{activeList.status === 'draft' ? '草稿，确认后可开始默写。' : '已确认学习本。'}</p></div><div className="generated-learning-items">{activeList.items.map((item, index) => <div key={`${item.display_text}-${index}`}><strong>{item.display_text}</strong><span>{item.item_type === 'word' ? '单词' : item.item_type === 'phrase' ? '短语' : '句子'}</span>{item.translation_text && <p>{item.translation_text}</p>}</div>)}</div><div className="list-actions">{activeList.status === 'draft' ? <Button onClick={() => void confirmGenerated(activeList)}>确认并开始默写</Button> : activeList.word_list_version_id && onStartDictation ? <Button onClick={() => onStartDictation(activeList.items.map(item => item.display_text), activeList.word_list_version_id!)}>开始默写</Button> : null}<Button variant="secondary" onClick={() => setMainTab('items')}>返回生词</Button></div></article>}</>}

@@ -17,12 +17,12 @@ it('filters unknown items, changes mastery, and creates a learning list from sel
 
   expect(await screen.findByText('apple')).toBeVisible()
   await user.selectOptions(screen.getByLabelText('类型筛选'), 'word')
-  expect(onLoad).toHaveBeenLastCalledWith({ status: 'unknown', item_type: 'word' })
+  expect(onLoad).toHaveBeenLastCalledWith({ status: 'unknown', item_type: 'word', sort: 'recent' })
   await user.click(screen.getByRole('button', { name: '标记已掌握' }))
   expect(onUpdateStatus).toHaveBeenCalledWith('unknown-1', 'mastered')
 
   await user.selectOptions(screen.getByLabelText('状态筛选'), 'mastered')
-  expect(onLoad).toHaveBeenLastCalledWith({ status: 'mastered', item_type: 'word' })
+  expect(onLoad).toHaveBeenLastCalledWith({ status: 'mastered', item_type: 'word', sort: 'recent' })
   await user.selectOptions(screen.getByLabelText('类型筛选'), 'all')
   expect(await screen.findByText('I like apples.')).toBeVisible()
   await user.click(screen.getByRole('button', { name: '恢复不认识' }))
@@ -45,6 +45,17 @@ it('deletes an unknown item after confirmation and refreshes the list', async ()
   expect(onDelete).toHaveBeenCalledWith('unknown-1')
   expect(onLoad).toHaveBeenCalledTimes(1)
   expect(screen.queryByText('apple')).not.toBeInTheDocument()
+})
+
+it('sorts by word frequency and renders dictionary tags', async () => {
+  const user = userEvent.setup()
+  const onLoad = vi.fn().mockResolvedValue([{ ...unknownItems[0], word_tags: ['中考', '柯林斯3星'] }])
+  render(<UnknownItemsPage onLoad={onLoad} onUpdateStatus={vi.fn()} onCreateLearningList={vi.fn()} />)
+
+  expect(await screen.findByText('中考')).toBeVisible()
+  expect(screen.getByText('柯林斯3星')).toBeVisible()
+  await user.selectOptions(screen.getByLabelText('排序'), 'importance')
+  expect(onLoad).toHaveBeenLastCalledWith({ status: 'unknown', item_type: 'all', sort: 'importance' })
 })
 
 it('opens the generated learning-book tab after creating a list from unknown items', async () => {

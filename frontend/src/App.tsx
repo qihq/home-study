@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
-import { api, apiAudio, apiBlob } from "./api/client";
+import { api, apiAudio, apiBlob, ApiError } from "./api/client";
 import { LoginPage } from "./features/auth/LoginPage";
-import { DashboardPage } from "./features/dashboard/DashboardPage";
+import { DashboardPage, DashboardSummary } from "./features/dashboard/DashboardPage";
 import { RecordingPage } from "./features/recording/RecordingPage";
 import { DictationPage } from "./features/dictation/DictationPage";
 import { WordListEditor } from "./features/words/WordListEditor";
@@ -37,6 +37,7 @@ import {
 } from "./features/stats/DictationStatsPage";
 import { AppShell } from "./ui/AppShell";
 import {
+  RecordingLanguage,
   RecordingSession,
   createIndexedDbRecordingStore,
 } from "./lib/recordingStore";
@@ -64,6 +65,7 @@ export function App() {
     | "home"
     | "chinese"
     | "english"
+    | "skating"
     | "words"
     | "dictation"
     | "stats"
@@ -102,7 +104,12 @@ export function App() {
               await recordingStore.removeSession(item.recordingId);
               return null;
             }
-          } catch {
+          } catch (error) {
+            // 服务端已没有这条录制（被删除或从未创建成功）：清除残留会话，避免永远卡在「继续录制」
+            if (error instanceof ApiError && error.status === 404) {
+              await recordingStore.removeSession(item.recordingId);
+              return null;
+            }
             return item;
           }
           return item;
@@ -144,11 +151,18 @@ export function App() {
                         ? "chinese"
                         : item === "英文阅读"
                           ? "english"
-                          : "home",
+                          : item === "花滑录制"
+                            ? "skating"
+                            : "home",
     );
-  if (screen === "chinese" || screen === "english")
+  const recordingDestinations: Record<string, string> = {
+    chinese: "中文阅读",
+    english: "英文阅读",
+    skating: "花滑录制",
+  };
+  if (screen === "chinese" || screen === "english" || screen === "skating")
     return (
-      <AppShell onNavigate={navigate} activeDestination={screen === "chinese" ? "中文阅读" : "英文阅读"}>
+      <AppShell onNavigate={navigate} activeDestination={recordingDestinations[screen]}>
         <RecordingPage
           language={screen}
           recovery={recoveries.find((item) => item.language === screen)}
@@ -191,17 +205,82 @@ export function App() {
   if (screen === "download" && videoDownload) return <AppShell onNavigate={navigate} activeDestination="视频库"><VideoDownloadPage item={videoDownload} onBackToVideos={() => setScreen("videos")} onHome={() => setScreen("home")} /></AppShell>;
   if (screen === "settings") return <SettingsScreen onNavigate={navigate} />;
   return (
-    <AppShell onNavigate={navigate} activeDestination="今天">
+    <HomeScreen
+      onNavigate={navigate}
+      onRecord={setScreen}
+      recoveries={recoveries}
+    />
+  );
+}
+
+const localDate = () => {
+  const now = new Date();
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+};
+
+function dualStreak(calendar: ReadingStats["calendar"]) {
+  // 连续打卡按“中英文都完成”的日子计算；今天还没完成时从昨天起算
+  let start = calendar.length - 1;
+  const todayKey = localDate();
+  if (start < 0) return 0;
+  if (calendar[start]?.date === todayKey && !(calendar[start].chinese && calendar[start].english)) start -= 1;
+  let streak = 0;
+  for (let index = start; index >= 0; index -= 1) {
+    if (calendar[index].chinese && calendar[index].english) streak += 1;
+    else break;
+  }
+  return streak;
+}
+
+function HomeScreen({
+  onNavigate,
+  onRecord,
+  recoveries,
+}: {
+  onNavigate: (item: string) => void;
+  onRecord: (screen: "chinese" | "english" | "skating") => void;
+  recoveries: RecordingSession[];
+}) {
+  const [summary, setSummary] = useState<DashboardSummary>({
+    chinese: "pending",
+    english: "pending",
+    skating: "pending",
+    streak: 0,
+    weeklyRate: 0,
+  });
+  useEffect(() => {
+    const load = async () => {
+      const recordings = await Promise.resolve(api<RecordingItem[]>("/recordings"))
+        .then((value) => (Array.isArray(value) ? value : []))
+        .catch(() => []);
+      const stats = await Promise.resolve(api<ReadingStats>("/stats/reading?period=week"))
+        .then((value) => value ?? null)
+        .catch(() => null);
+      const today = localDate();
+      const stateFor = (language: RecordingLanguage): DashboardSummary["chinese"] => {
+        const todays = recordings.filter((item) => item.reading_date === today && item.language_type === language);
+        if (todays.some((item) => item.status === "ready")) return "complete";
+        if (todays.some((item) => ["recording", "assembling", "transcoding"].includes(item.status))) return "processing";
+        return "pending";
+      };
+      setSummary({
+        chinese: stateFor("chinese"),
+        english: stateFor("english"),
+        skating: stateFor("skating"),
+        streak: stats ? dualStreak(stats.calendar) : 0,
+        weeklyRate: stats ? Math.round((stats.combined_rate ?? 0) * 100) : 0,
+      });
+    };
+    void load();
+  }, []);
+  return (
+    <AppShell onNavigate={onNavigate} activeDestination="今天">
       <DashboardPage
-        summary={{
-          chinese: "pending",
-          english: "pending",
-          streak: 0,
-          weeklyRate: 0,
-        }}
+        summary={summary}
         recoveryLanguage={recoveries[0]?.language}
-        onRecord={setScreen}
-        onDictation={() => setScreen("words")}
+        onRecord={onRecord}
+        onDictation={() => onNavigate("单词本")}
+        onOpenVideos={() => onNavigate("视频库")}
       />
     </AppShell>
   );
@@ -360,12 +439,12 @@ function DictionaryScreen({
       .then(setVoices)
       .catch(() => setVoices([]));
   }, []);
-  const play = async (entryId: string, voiceVersionId?: string, regenerate = false) => {
+  const play = async (entryId: string, voiceVersionId?: string, regenerate = false, accent: "uk" | "us" = "us") => {
     const { asset_id } = await api<{ asset_id: string }>(
       `/dictionary/entries/${entryId}/audio`,
       {
         method: "POST",
-        body: JSON.stringify(regenerate ? { voice_version_id: voiceVersionId || null, regenerate: true } : { voice_version_id: voiceVersionId || null }),
+        body: JSON.stringify(regenerate ? { voice_version_id: voiceVersionId || null, regenerate: true, accent } : { voice_version_id: voiceVersionId || null, accent }),
       },
     );
     const source = URL.createObjectURL(
@@ -388,6 +467,9 @@ function DictionaryScreen({
           })
         }
         onPlay={play}
+        onStreamPlay={(text) =>
+          new Audio(`/api/tts/stream?text=${encodeURIComponent(text)}`).play()
+        }
         onMarkUnknown={(entryId) =>
           api(`/dictionary/entries/${entryId}/mark-unknown`, { method: "POST" })
         }
@@ -407,12 +489,15 @@ function UnknownItemsScreen({
   const load = ({
     status,
     item_type,
+    sort = "recent",
   }: {
     status: "unknown" | "mastered";
     item_type: "all" | UnknownItem["item_type"];
+    sort?: "recent" | "importance";
   }) => {
     const params = new URLSearchParams({ status });
     if (item_type !== "all") params.set("item_type", item_type);
+    params.set("sort", sort);
     return api<UnknownItem[]>(`/unknown-items?${params}`);
   };
   return (

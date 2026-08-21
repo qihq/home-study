@@ -23,10 +23,69 @@ def test_tts_settings_masks_api_key_and_retains_it_when_omitted(client, admin_us
     body = client.get('/api/settings/tts', headers=headers).json()
     assert body == {
         'protocol': 'openai_compatible', 'base_url': 'https://tts.example.com/v1',
-        'model': 'tts-1', 'voice': 'alloy', 'speed': 1.2,
+        'model': 'tts-1', 'voice': 'alloy', 'voice_zh': '冰糖', 'speed': 1.2,
         'pronunciation_source': 'configured', 'voice_version_id': None,
         'api_key_configured': True, 'api_key_mask': '********-key',
     }
+
+
+def test_tts_settings_save_chinese_voice_for_mimo(client, admin_user):
+    login = client.post('/api/auth/login', json={'username': 'parent', 'password': 'correct horse'})
+    headers = {'Cookie': login.headers['set-cookie'].split(';')[0]}
+
+    saved = client.patch('/api/settings/tts', headers=headers, json={
+        'protocol': 'mimo', 'base_url': 'https://api.xiaomimimo.com/v1', 'api_key': 'key',
+        'model': 'mimo-v2.5-tts', 'voice': 'Milo', 'voice_zh': '苏打', 'speed': 0.8,
+    })
+
+    assert saved.status_code == 200
+    body = saved.json()
+    assert body['voice'] == 'Milo'
+    assert body['voice_zh'] == '苏打'
+
+
+def test_tts_settings_reject_deprecated_mimo_v2_models(client, admin_user):
+    login = client.post('/api/auth/login', json={'username': 'parent', 'password': 'correct horse'})
+    headers = {'Cookie': login.headers['set-cookie'].split(';')[0]}
+
+    response = client.patch('/api/settings/tts', headers=headers, json={
+        'protocol': 'mimo', 'base_url': 'https://api.xiaomimimo.com/v1', 'api_key': 'key',
+        'model': 'mimo-v2-tts', 'voice': 'Chloe', 'speed': 1.0,
+    })
+
+    assert response.status_code == 422
+    assert response.json()['detail']['code'] == 'TTS_MODEL_DEPRECATED'
+
+
+def test_tts_settings_reject_unknown_mimo_model_and_invalid_voices(client, admin_user):
+    login = client.post('/api/auth/login', json={'username': 'parent', 'password': 'correct horse'})
+    headers = {'Cookie': login.headers['set-cookie'].split(';')[0]}
+    base = {'protocol': 'mimo', 'base_url': 'https://api.xiaomimimo.com/v1', 'api_key': 'key', 'model': 'mimo-v2.5-tts', 'voice': 'Chloe', 'speed': 1.0}
+
+    unknown_model = client.patch('/api/settings/tts', headers=headers, json={**base, 'model': 'mimo-v3-tts'})
+    assert unknown_model.status_code == 422
+    assert unknown_model.json()['detail']['code'] == 'TTS_MODEL_UNKNOWN'
+
+    bad_en_voice = client.patch('/api/settings/tts', headers=headers, json={**base, 'voice': 'custom-voice'})
+    assert bad_en_voice.status_code == 422
+    assert bad_en_voice.json()['detail']['code'] == 'TTS_VOICE_INVALID'
+
+    bad_zh_voice = client.patch('/api/settings/tts', headers=headers, json={**base, 'voice_zh': '自定义'})
+    assert bad_zh_voice.status_code == 422
+    assert bad_zh_voice.json()['detail']['code'] == 'TTS_VOICE_INVALID'
+
+
+def test_tts_settings_skip_official_validation_for_custom_mimo_gateway(client, admin_user):
+    login = client.post('/api/auth/login', json={'username': 'parent', 'password': 'correct horse'})
+    headers = {'Cookie': login.headers['set-cookie'].split(';')[0]}
+
+    response = client.patch('/api/settings/tts', headers=headers, json={
+        'protocol': 'mimo', 'base_url': 'https://tts.example.com/v1', 'api_key': 'key',
+        'model': 'my-custom-mimo-model', 'voice': 'my-voice', 'speed': 1.0,
+    })
+
+    assert response.status_code == 200
+    assert response.json()['model'] == 'my-custom-mimo-model'
 
 
 def test_cache_key_changes_when_tts_protocol_or_model_changes():

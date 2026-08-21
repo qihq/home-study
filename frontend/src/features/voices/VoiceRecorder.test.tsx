@@ -12,4 +12,6 @@ it('requires consent, records a browser audio sample, and enables upload only af
   await user.click(screen.getByLabelText('我已确认拥有该声音的授权'))
   expect(screen.getByRole('button', { name: '开始录制' })).toBeEnabled()
   expect(screen.getByText('录制时长：0 秒（需要 8–30 秒）')).toBeVisible()
+  expect(screen.getByText(/建议在安静环境下录制/)).toBeVisible()
+  expect(screen.getByText(/今天天气真好/)).toBeVisible()
 })

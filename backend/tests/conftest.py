@@ -71,6 +71,19 @@ def video_fixture(tmp_path: Path) -> bytes:
 
 
 @pytest.fixture()
+def video_only_fixture(tmp_path: Path) -> bytes:
+    ffmpeg = shutil.which('ffmpeg')
+    if ffmpeg is None:
+        pytest.skip('ffmpeg is required for video worker test')
+    output = tmp_path / 'video-only.mp4'
+    subprocess.run([
+        ffmpeg, '-y', '-f', 'lavfi', '-i', 'color=c=blue:s=320x240:d=1:r=24',
+        '-c:v', 'libx264', str(output),
+    ], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    return output.read_bytes()
+
+
+@pytest.fixture()
 def fragmented_video_chunks(tmp_path: Path) -> list[bytes]:
     ffmpeg = shutil.which('ffmpeg')
     if ffmpeg is None:

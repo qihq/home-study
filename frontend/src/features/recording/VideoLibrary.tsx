@@ -2,20 +2,39 @@ import { FormEvent, useEffect, useMemo, useRef, useState } from 'react'
 import { RecordingCalendar } from './RecordingCalendar'
 import { VideoDownloadItem } from './VideoDownloadPage'
 import { Button } from '../../ui/Button'
+import { RecordingLanguage } from '../../lib/recordingStore'
 
 export type RecordingItem = {
   id: string
   reading_date: string
-  language_type: 'chinese' | 'english'
+  language_type: RecordingLanguage
   title?: string | null
   status: string
   is_official: boolean
   duration_ms: number | null
   download_ready: boolean
+  failure_code?: string | null
 }
 
-const labels = { chinese: '中文阅读', english: '英文阅读' }
+const labels: Record<RecordingLanguage, string> = { chinese: '中文阅读', english: '英文阅读', skating: '花滑录制' }
+const icons: Record<RecordingLanguage, string> = { chinese: 'camera.svg', english: 'chat.svg', skating: 'skating.svg' }
 const asset = (name: string) => `/animal-island/${name}`
+
+const failureReason = (code: string | null | undefined) => {
+  if (!code) return null
+  const reasons: Record<string, string> = {
+    NO_AUDIO_TRACK: '本次录制没有录到声音（麦克风未授权或不可用），请确认麦克风权限后重新录制。',
+    NO_VIDEO_TRACK: '本次录制没有画面，请重新录制。',
+    SOURCE_INVALID: '源视频无效，请重新录制或重新上传。',
+    SOURCE_MISSING: '源视频文件缺失，请重新录制或重新上传。',
+    RECORDING_NOT_FOUND: '录制数据缺失，请删除后重新录制。',
+    MP4_BOX_TRUNCATED: '视频数据不完整，请重新录制。',
+    FMP4_INITIALIZATION_INVALID: '视频数据不完整，请重新录制。',
+    FMP4_INITIALIZATION_MISSING: '视频数据不完整，请重新录制。',
+    FMP4_CHUNK_LAYOUT_INVALID: '视频数据不完整，请重新录制。',
+  }
+  return reasons[code] ?? null
+}
 
 const formatDuration = (durationMs: number | null) => {
   if (!durationMs) return '时长计算中'
@@ -49,7 +68,7 @@ type Props = {
   onRename?: (id: string, title: string) => Promise<void>
   onRetryProcessing?: (id: string) => Promise<void>
   onDownload?: (item: VideoDownloadItem) => void
-  onUpload?: (value: { file: File; readingDate: string; languageType: 'chinese' | 'english' }) => Promise<void>
+  onUpload?: (value: { file: File; readingDate: string; languageType: RecordingLanguage }) => Promise<void>
 }
 
 const localDate = () => {
@@ -64,7 +83,7 @@ export function VideoLibrary({ recordings, loading = false, loadError = null, on
   const [uploading, setUploading] = useState(false)
   const [uploadMessage, setUploadMessage] = useState('')
   const [uploadDate, setUploadDate] = useState(localDate)
-  const [uploadLanguage, setUploadLanguage] = useState<'chinese' | 'english'>('chinese')
+  const [uploadLanguage, setUploadLanguage] = useState<RecordingLanguage>('chinese')
   const [uploadFile, setUploadFile] = useState<File | null>(null)
   const dateInitialized = useRef(recordings.length > 0)
   const visibleRecordings = useMemo(() => selectedDate ? recordings.filter(item => item.reading_date === selectedDate) : recordings, [recordings, selectedDate])
@@ -124,7 +143,7 @@ export function VideoLibrary({ recordings, loading = false, loadError = null, on
         <p>选择妈妈录视频的日期，上传后会归到那一天。</p>
         <form onSubmit={event => void submitUpload(event)}>
           <label>阅读日期<input aria-label="阅读日期" type="date" required max={localDate()} value={uploadDate} onChange={event => setUploadDate(event.target.value)} /></label>
-          <label>阅读类型<select aria-label="阅读类型" value={uploadLanguage} onChange={event => setUploadLanguage(event.target.value as 'chinese' | 'english')}><option value="chinese">中文阅读</option><option value="english">英文阅读</option></select></label>
+          <label>视频类别<select aria-label="视频类别" value={uploadLanguage} onChange={event => setUploadLanguage(event.target.value as RecordingLanguage)}><option value="chinese">中文阅读</option><option value="english">英文阅读</option><option value="skating">花滑录制</option></select></label>
           <label className="video-file-field">选择视频<input aria-label="选择视频" type="file" required accept="video/*,.mp4,.mov,.m4v,.webm" onChange={event => setUploadFile(event.target.files?.[0] ?? null)} /><small>{uploadFile ? `${uploadFile.name} · ${(uploadFile.size / 1024 / 1024).toFixed(1)} MB` : '支持手机相册中的常见视频，最大 4 GB'}</small></label>
           <Button type="submit" disabled={uploading || !uploadFile}>{uploading ? '正在上传…' : '上传到影像馆'}</Button>
         </form>
@@ -149,7 +168,7 @@ export function VideoLibrary({ recordings, loading = false, loadError = null, on
         const downloadName = `${recording.reading_date}-${recording.language_type}-reading.mp4`
         return <article className={isPreviewing ? 'recording-card is-previewing' : 'recording-card'} key={recording.id}>
           <div className="recording-card-heading">
-            <span className={`recording-type-icon ${recording.language_type}`}><img src={asset(recording.language_type === 'chinese' ? 'camera.svg' : 'chat.svg')} alt="" /></span>
+            <span className={`recording-type-icon ${recording.language_type}`}><img src={asset(icons[recording.language_type])} alt="" /></span>
             <div>
               <div className="recording-badges">
                 <span>{labels[recording.language_type]}</span>
@@ -182,6 +201,7 @@ export function VideoLibrary({ recordings, loading = false, loadError = null, on
               </button>
             </>}
             {['assemble_failed', 'transcode_failed'].includes(recording.status) && <button className="recording-retry-button" onClick={() => void onRetryProcessing?.(recording.id)}>重新处理</button>}
+            {['assemble_failed', 'transcode_failed'].includes(recording.status) && failureReason(recording.failure_code) && <p className="recording-failure-reason" role="status">{failureReason(recording.failure_code)}</p>}
           </div>
 
           <div className="recording-secondary-actions">

@@ -11,6 +11,44 @@ def test_dictation_session_requires_confirmed_word_list(client: TestClient, admi
     assert response.json()['detail']['code'] == 'WORD_LIST_VERSION_NOT_FOUND'
 
 
+def test_dictation_sentence_result_streams_audio(client: TestClient, admin_user, monkeypatch) -> None:
+    from app.db.session import get_session_factory
+    from app.services.tts_config import save_tts_config
+
+    login = client.post('/api/auth/login', json={'username': 'parent', 'password': 'correct horse'})
+    headers = {'Cookie': login.headers['set-cookie'].split(';', 1)[0]}
+    with get_session_factory()() as session:
+        save_tts_config(session, protocol='mimo', base_url='https://api.xiaomimimo.com/v1', api_key_value='key', model='mimo-v2.5-tts', voice='Chloe', speed=1.0)
+    monkeypatch.setattr('app.api.dictation.MimoTtsClient.stream', lambda self, text: iter([b'pcm']))
+    word_list = client.post('/api/word-lists', json={'title': 'Sentence stream', 'pasted_text': 'I like apples.'}, headers=headers).json()
+    version = client.post(f"/api/word-lists/{word_list['id']}/confirm", headers=headers).json()
+    created = client.post('/api/dictation-sessions', json={'word_list_version_id': version['word_list_version_id']}, headers=headers).json()
+    result = created['results'][0]
+    assert result['item_type'] == 'sentence'
+
+    response = client.get(f"/api/dictation-sessions/{created['id']}/results/{result['id']}/audio-stream", headers=headers)
+
+    assert response.status_code == 200
+    assert response.headers['content-type'].startswith('audio/wav')
+    assert response.content.startswith(b'RIFF')
+    assert response.content.endswith(b'pcm')
+
+
+def test_dictation_word_result_stream_is_rejected(client: TestClient, admin_user) -> None:
+    login = client.post('/api/auth/login', json={'username': 'parent', 'password': 'correct horse'})
+    headers = {'Cookie': login.headers['set-cookie'].split(';', 1)[0]}
+    word_list = client.post('/api/word-lists', json={'title': 'Word stream', 'pasted_text': 'Apple'}, headers=headers).json()
+    version = client.post(f"/api/word-lists/{word_list['id']}/confirm", headers=headers).json()
+    created = client.post('/api/dictation-sessions', json={'word_list_version_id': version['word_list_version_id']}, headers=headers).json()
+    result = created['results'][0]
+    assert result['item_type'] == 'word'
+
+    response = client.get(f"/api/dictation-sessions/{created['id']}/results/{result['id']}/audio-stream", headers=headers)
+
+    assert response.status_code == 409
+    assert response.json()['detail']['code'] == 'DICTATION_STREAM_WORDS_UNSUPPORTED'
+
+
 def test_dictation_session_returns_hidden_word_data_and_scores_result(client: TestClient, admin_user) -> None:
     login = client.post('/api/auth/login', json={'username': 'parent', 'password': 'correct horse'})
     headers = {'Cookie': login.headers['set-cookie'].split(';', 1)[0]}

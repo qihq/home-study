@@ -33,7 +33,7 @@ def validate_normalized_wav(path: Path) -> VoiceSampleMetadata:
     if len(audio_streams) != 1:
         raise VoiceSampleError('VOICE_SAMPLE_UNSUPPORTED')
     duration_seconds = float(probe.get('format', {}).get('duration', 0))
-    if duration_seconds < 3:
+    if duration_seconds < 8:
         raise VoiceSampleError('VOICE_SAMPLE_TOO_SHORT')
     if duration_seconds > 30:
         raise VoiceSampleError('VOICE_SAMPLE_TOO_LONG')

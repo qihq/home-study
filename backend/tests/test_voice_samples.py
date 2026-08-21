@@ -17,10 +17,10 @@ def _wav(path: Path, duration_seconds: int) -> Path:
 def test_voice_sample_validation_accepts_wav_and_rejects_invalid_duration(tmp_path: Path) -> None:
     from app.services.voice_samples import VoiceSampleError, validate_normalized_wav
 
-    valid = validate_normalized_wav(_wav(tmp_path / 'valid.wav', 8))
-    assert valid.duration_ms == 8_000
+    valid = validate_normalized_wav(_wav(tmp_path / 'valid.wav', 9))
+    assert valid.duration_ms == 9_000
     with pytest.raises(VoiceSampleError, match='VOICE_SAMPLE_TOO_SHORT'):
-        validate_normalized_wav(_wav(tmp_path / 'short.wav', 2))
+        validate_normalized_wav(_wav(tmp_path / 'short.wav', 7))
     with pytest.raises(VoiceSampleError, match='VOICE_SAMPLE_TOO_LONG'):
         validate_normalized_wav(_wav(tmp_path / 'long.wav', 31))
 

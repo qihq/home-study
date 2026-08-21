@@ -11,6 +11,7 @@ export type TtsConfig = {
   base_url: string;
   model: string;
   voice: string;
+  voice_zh?: string | null;
   speed: number;
   pronunciation_source?: "configured" | "custom";
   voice_version_id?: string | null;
@@ -188,14 +189,52 @@ export function SettingsPage({
               onChange={(event) => update("model", event.target.value)}
             />
           </label>
-          <label>
-            音色
-            <input
-              value={form.voice}
-              required
-              onChange={(event) => update("voice", event.target.value)}
-            />
-          </label>
+          {form.protocol === "mimo" ? (
+            <>
+              <label>
+                英文音色
+                <select
+                  aria-label="英文音色"
+                  value={form.voice}
+                  onChange={(event) => update("voice", event.target.value)}
+                >
+                  <option value="Chloe">Chloe（英文 · 女声）</option>
+                  <option value="Mia">Mia（英文 · 女声）</option>
+                  <option value="Milo">Milo（英文 · 男声）</option>
+                  <option value="Dean">Dean（英文 · 男声）</option>
+                  <option value="mimo_default">mimo_default（集群默认）</option>
+                </select>
+              </label>
+              <label>
+                中文音色
+                <select
+                  aria-label="中文音色"
+                  value={form.voice_zh ?? "冰糖"}
+                  onChange={(event) => update("voice_zh", event.target.value)}
+                >
+                  <option value="冰糖">冰糖（中文 · 女声）</option>
+                  <option value="茉莉">茉莉（中文 · 女声）</option>
+                  <option value="苏打">苏打（中文 · 男声）</option>
+                  <option value="白桦">白桦（中文 · 男声）</option>
+                  <option value="mimo_default">mimo_default（集群默认）</option>
+                </select>
+              </label>
+              <p>
+                英文文本使用英文音色、中文文本使用中文音色朗读。MiMo V2
+                系列模型已于 2026-06-30 下线，请使用 mimo-v2.5
+                系列模型名；语速通过朗读风格指令生效。
+              </p>
+            </>
+          ) : (
+            <label>
+              音色
+              <input
+                value={form.voice}
+                required
+                onChange={(event) => update("voice", event.target.value)}
+              />
+            </label>
+          )}
           <label>
             语速
             <input

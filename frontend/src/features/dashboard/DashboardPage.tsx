@@ -3,21 +3,23 @@ import { Button } from '../../ui/Button'
 export type DashboardSummary = {
   chinese: 'pending' | 'complete' | 'processing'
   english: 'pending' | 'complete' | 'processing'
+  skating: 'pending' | 'complete' | 'processing'
   streak: number
   weeklyRate: number
 }
 
-const readingCopy = { chinese: '中文阅读', english: '英文阅读' } as const
+const readingCopy = { chinese: '中文阅读', english: '英文阅读', skating: '花滑录制' } as const
+const cardStateCopy = { pending: '等待开始', complete: '已完成', processing: '正在处理' } as const
 
-export function DashboardPage({ summary, onRecord, onDictation, recoveryLanguage }: { summary: DashboardSummary; onRecord?: (language: 'chinese' | 'english') => void; onDictation?: () => void; recoveryLanguage?: 'chinese' | 'english' }) {
+export function DashboardPage({ summary, onRecord, onDictation, onOpenVideos, recoveryLanguage }: { summary: DashboardSummary; onRecord?: (language: keyof typeof readingCopy) => void; onDictation?: () => void; onOpenVideos?: () => void; recoveryLanguage?: keyof typeof readingCopy }) {
   return <section className="dashboard">
     <header className="page-header island-hero"><div><p className="date">今天的学习岛</p><h1>陪孩子，慢慢积累</h1><p>阅读一点，记住一点，每天都在长大。</p></div><img src="/animal-island/animal-icon.png" alt="两只欢迎学习的小岛伙伴" /></header>
     <div className="reading-grid">
       {(Object.keys(readingCopy) as Array<keyof typeof readingCopy>).map((language) => {
         const state = summary[language]
-        return <article className="task-card" key={language}>
-          <div><p className="task-label">{readingCopy[language]}</p><h2>{state === 'complete' ? '已完成' : state === 'processing' ? '正在处理' : '等待开始'}</h2></div>
-          {state === 'pending' ? <Button onClick={() => onRecord?.(language)}>开始{readingCopy[language]}</Button> : <Button variant="secondary">查看视频</Button>}
+        return <article className={`task-card ${language}`} key={language}>
+          <div><p className="task-label">{readingCopy[language]}</p><h2>{cardStateCopy[state]}</h2></div>
+          {state === 'pending' ? <Button onClick={() => onRecord?.(language)}>开始{readingCopy[language]}</Button> : <Button variant="secondary" onClick={onOpenVideos}>查看视频</Button>}
         </article>
       })}
     </div>

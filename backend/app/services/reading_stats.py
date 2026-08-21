@@ -24,6 +24,8 @@ def build_reading_stats(session: Session, child_id: str, period: str, today: dat
         Recording.is_official.is_(True),
         Recording.source_validated_at.is_not(None),
         Recording.source_missing_at.is_(None),
+        # 只有中英文阅读计入阅读统计；花滑等其他视频类别不参与
+        Recording.language_type.in_(('chinese', 'english')),
     )))
     by_language = {}
     for language in ('chinese', 'english'):

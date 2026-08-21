@@ -20,7 +20,9 @@ from app.models.tts_asset import TtsAsset
 from app.models.user import User
 from app.services.ai_config import ai_api_key, get_ai_config
 from app.services.dictionary import DictionaryServiceError, delete_dictionary_history, detect_direction, dictionary_history, lookup_dictionary, store_dictionary_result
+from app.services.dictionary_audio import ensure_word_audio_asset
 from app.services.local_dictionary import LocalDictionary
+from app.services.online_dictionary import lookup_online_word
 from app.services.openai_chat import OpenAiChatClient, OpenAiChatError
 from app.workers.tts import generate_configured_tts
 from app.workers.voice import generate_text_with_voice
@@ -38,6 +40,7 @@ class DictionaryLookupRequest(BaseModel):
 class DictionaryAudioRequest(BaseModel):
     voice_version_id: str | None = None
     regenerate: bool = False
+    accent: Literal['uk', 'us'] = 'us'
 
 
 def _current_child(session: DbSession) -> Child:
@@ -65,10 +68,15 @@ def lookup(payload: DictionaryLookupRequest, session: DbSession, user: Annotated
                 result, prompt_version='local-v2', owner_user_id=user.id,
             )
             return {**found.result.model_dump(), 'cache_hit': found.cache_hit, 'entry_id': found.entry_id}
+    if source == 'en' and local_eligible:
+        # Free online dictionary tier for English words (30-day cached), below the LLM tier.
+        online = lookup_online_word(session, _current_child(session).id, normalized, user.id)
+        if online is not None:
+            return {**online.result.model_dump(), 'cache_hit': online.cache_hit, 'entry_id': online.entry_id}
     config = get_ai_config(session)
     if config is None or not config.enabled or not config.api_key_encrypted:
         code = 'DICTIONARY_LOCAL_MISS' if local_eligible else 'DICTIONARY_AI_REQUIRED'
-        message = '本地词典没有找到这个词；配置 AI 后可继续查询。' if local_eligible else '短语和句子查询需要先配置辞典 AI。'
+        message = '本地和在线词典都没有找到这个词；配置 AI 后可继续查询。' if local_eligible else '短语和句子查询需要先配置辞典 AI。'
         raise HTTPException(409, detail={'code': code, 'message': message})
     client = OpenAiChatClient(ai_api_key(config), config.base_url, config.model, config.timeout_seconds)
     client.fingerprint = f'{config.protocol}:{config.base_url}:{config.model}:{config.temperature}'
@@ -89,7 +97,7 @@ def dictionary_audio(entry_id: str, payload: DictionaryAudioRequest, session: Db
     history = session.scalar(select(DictionaryHistory).where(DictionaryHistory.entry_id == entry.id, DictionaryHistory.owner_user_id == user.id))
     require_resource_owner(session, history.owner_user_id if history else None, user)
     result = json.loads(entry.result_json)
-    text = result['source_text'] if result.get('source_language') == 'en' else result['primary_translation']
+    source_language = result.get('source_language', 'en')
     configured = get_tts_config(session)
     selected_voice_id = payload.voice_version_id or (configured.voice_version_id if configured and configured.pronunciation_source == 'custom' else None)
     voice = session.get(VoiceVersion, selected_voice_id) if selected_voice_id else None
@@ -100,6 +108,15 @@ def dictionary_audio(entry_id: str, payload: DictionaryAudioRequest, session: Db
         if speaker is None:
             raise HTTPException(404, detail={'code': 'SPEAKER_NOT_FOUND', 'message': 'Speaker not found'})
         require_resource_owner(session, speaker.owner_user_id, user)
+    if voice is None and result.get('item_type') == 'word':
+        # Single words get real dictionary audio (free sources, cached); fall back to TTS on failure.
+        dictionary_asset = ensure_word_audio_asset(
+            session, result['source_text'], source_language,
+            accent=payload.accent, owner_user_id=user.id, regenerate=payload.regenerate,
+        )
+        if dictionary_asset is not None:
+            return {'asset_id': dictionary_asset.id}
+    text = result['source_text'] if source_language == 'en' else result['primary_translation']
     voice_key = voice.id if voice else 'default'
     cache_material = f'dictionary:v{AUDIO_VERSION}:{user.id}:{voice_key}:{text}'
     if payload.regenerate:

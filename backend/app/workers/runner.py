@@ -7,12 +7,21 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy.orm import Session
 
 from app.db.session import get_session_factory
+from app.services.dictionary_updates import enqueue_if_due, process_update_dictionary
 from app.services.jobs import claim_next_job
 from app.workers.video import process_assemble_video, process_transcode_video
 from app.workers.tts import process_generate_tts
 from app.workers.voice import process_normalize_voice_sample, process_voice_preview
 from app.workers.activity import WorkerActivity, touch_worker_heartbeat
 from app.workers.video import MediaError
+
+# Errors that retrying cannot fix: the source file itself is unusable.
+# Jobs failing with these stop immediately instead of burning retry cycles.
+PERMANENT_MEDIA_ERRORS = {
+    'NO_VIDEO_TRACK', 'NO_AUDIO_TRACK', 'SOURCE_INVALID', 'SOURCE_MISSING',
+    'RECORDING_NOT_FOUND', 'MP4_BOX_TRUNCATED',
+    'FMP4_INITIALIZATION_INVALID', 'FMP4_INITIALIZATION_MISSING', 'FMP4_CHUNK_LAYOUT_INVALID',
+}
 
 
 def repair_pending_work(session: Session) -> None:
@@ -21,10 +30,12 @@ def repair_pending_work(session: Session) -> None:
     from app.models.speaker import VoiceVersion
     from app.models.job import Job
     from app.services.jobs import enqueue_once
-    from app.services.learning_items import enqueue_missing_tts_for_confirmed_items
+    from app.services.learning_items import enqueue_dictionary_audio_upgrade, enqueue_missing_tts_for_confirmed_items
 
     for recording in session.scalars(select(Recording).where(Recording.status == 'transcode_failed', Recording.source_path.is_not(None))):
         latest = session.scalar(select(Job).where(Job.type == 'transcode_video', Job.entity_id == recording.id).order_by(Job.created_at.desc()))
+        if latest is not None and latest.error_code in PERMANENT_MEDIA_ERRORS:
+            continue
         if latest is None or latest.attempts < latest.max_attempts:
             recording.status = 'transcoding'
             if latest is not None and latest.status == 'failed':
@@ -62,6 +73,10 @@ def repair_pending_work(session: Session) -> None:
         job.locked_at = None
     session.commit()
     enqueue_missing_tts_for_confirmed_items(session)
+    enqueue_dictionary_audio_upgrade(session)
+    from app.services.tts_maintenance import maybe_cleanup_stale_tts_assets
+    maybe_cleanup_stale_tts_assets(session)
+    enqueue_if_due(session)
 
 
 def _set_progress(session: Session, job_id: str, progress: int) -> None:
@@ -102,6 +117,7 @@ def run_once(session: Session, worker_id: str, now: datetime | None = None) -> b
         'generate_tts': process_generate_tts,
         'normalize_voice_sample': process_normalize_voice_sample,
         'voice_preview': process_voice_preview,
+        'update_dictionary': process_update_dictionary,
     }
     handler = handlers.get(job.type)
     if handler is None:
@@ -127,7 +143,15 @@ def run_once(session: Session, worker_id: str, now: datetime | None = None) -> b
         except MediaError as error:
             session.rollback()
             job = session.get(type(job), job.id)
-            _retry_media_job(session, job, current_time, str(error), str(error))
+            code = str(error) or 'MEDIA_PROCESSING_FAILED'
+            if code in PERMANENT_MEDIA_ERRORS:
+                job.status = 'failed'
+                job.error_code = code[:80]
+                job.error_detail = str(error)[:500]
+                job.locked_by = None
+                job.locked_at = None
+            else:
+                _retry_media_job(session, job, current_time, code, str(error))
         except Exception as error:
             session.rollback()
             job = session.get(type(job), job.id)

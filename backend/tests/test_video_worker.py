@@ -116,11 +116,44 @@ def test_transcode_failure_keeps_source_completion(session, video_fixture: bytes
     session.add(recording); session.commit()
     monkeypatch.setattr('app.workers.video.transcode_recording', lambda *_: (_ for _ in ()).throw(MediaError('encoder failed')))
 
-    process_transcode_video(session, recording.id)
+    with pytest.raises(MediaError, match='encoder failed'):
+        process_transcode_video(session, recording.id)
     session.refresh(recording)
 
     assert recording.source_validated_at is not None
     assert recording.status == 'transcode_failed'
+
+
+def test_probe_video_rejects_source_without_audio_track(video_only_fixture: bytes, tmp_path: Path) -> None:
+    from app.workers.video import MediaError, probe_video
+
+    path = tmp_path / 'video-only.mp4'; path.write_bytes(video_only_fixture)
+
+    with pytest.raises(MediaError, match='NO_AUDIO_TRACK'):
+        probe_video(path)
+
+
+def test_assembly_raises_real_reason_when_source_has_no_audio(session, video_only_fixture: bytes, tmp_path: Path) -> None:
+    import hashlib
+    from app.models.child import Child
+    from app.models.job import Job
+    from app.models.recording import Recording, RecordingChunk
+    from app.workers.video import MediaError, process_assemble_video
+
+    child = Child(display_name='孩子', slug='no-audio-child')
+    session.add(child); session.flush()
+    recording = Recording(child_id=child.id, reading_date=datetime.now().date(), language_type='english', status='assembling')
+    session.add(recording); session.flush()
+    path = tmp_path / 'silent-chunk.mp4'; path.write_bytes(video_only_fixture)
+    session.add(RecordingChunk(recording_id=recording.id, sequence=0, size_bytes=len(video_only_fixture), sha256=hashlib.sha256(video_only_fixture).hexdigest(), mime_type='video/mp4', path=str(path)))
+    session.commit()
+
+    with pytest.raises(MediaError, match='NO_AUDIO_TRACK'):
+        process_assemble_video(session, recording.id)
+    session.refresh(recording)
+
+    assert recording.status == 'assemble_failed'
+    assert session.query(Job).filter_by(type='transcode_video', entity_id=recording.id).count() == 0
 
 
 def test_transcode_writes_mp4_even_when_temporary_name_ends_in_part(session, video_fixture: bytes, tmp_path: Path) -> None:

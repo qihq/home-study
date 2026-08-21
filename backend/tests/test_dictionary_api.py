@@ -156,6 +156,44 @@ def test_ready_voice_versions_are_available_for_dictionary_playback(client: Test
     assert response.json() == [{'id': response.json()[0]['id'], 'display_name': '爸爸 / 已就绪'}]
 
 
+def test_dictionary_audio_prefers_free_dictionary_source_for_words(client: TestClient, admin_user, monkeypatch, tmp_path) -> None:
+    from app.db.session import get_session_factory
+    from app.models.dictionary import DictionaryEntry
+    from app.models.tts_asset import TtsAsset
+    from app.models.user import User
+
+    login = client.post('/api/auth/login', json={'username': 'parent', 'password': 'correct horse'})
+    headers = {'Cookie': login.headers['set-cookie'].split(';', 1)[0]}
+    with get_session_factory()() as session:
+        user_id = session.query(User).filter_by(username='parent').one().id
+        entry = DictionaryEntry(
+            query_hash='e' * 64,
+            result_json='{"source_language":"en","target_language":"zh","item_type":"word","source_text":"apple","primary_translation":"苹果"}',
+        )
+        session.add(entry); session.commit(); entry_id = entry.id
+
+    audio_file = tmp_path / 'apple.mp3'
+    audio_file.write_bytes(b'ID3' + b'\x00' * 60 + b'real-mp3')
+
+    def fake_ensure(session, text, source_language, accent='us', owner_user_id=None, regenerate=False):
+        assert (text, source_language, accent, owner_user_id) == ('apple', 'en', 'us', user_id)
+        asset = TtsAsset(
+            cache_key='f' * 64, provider='dictionary_audio', model='dictvoice', voice=accent,
+            locale='en-US', speed=1.0, normalized_text=text, path=str(audio_file), owner_user_id=owner_user_id,
+        )
+        session.add(asset); session.commit(); session.refresh(asset)
+        return asset
+
+    monkeypatch.setattr('app.api.dictionary.ensure_word_audio_asset', fake_ensure)
+
+    response = client.post(f'/api/dictionary/entries/{entry_id}/audio', json={}, headers=headers)
+
+    assert response.status_code == 200
+    audio = client.get(f"/api/tts-assets/{response.json()['asset_id']}/audio", headers=headers)
+    assert audio.content == b'ID3' + b'\x00' * 60 + b'real-mp3'
+    assert audio.headers['content-type'].startswith('audio/mpeg')
+
+
 def test_dictionary_lookup_honors_auto_and_manual_direction(client: TestClient, admin_user, monkeypatch) -> None:
     login = client.post('/api/auth/login', json={'username': 'parent', 'password': 'correct horse'})
     headers = {'Cookie': login.headers['set-cookie'].split(';', 1)[0]}
@@ -202,6 +240,7 @@ def test_local_english_and_chinese_words_work_without_ai_configuration(client: T
 
 def test_local_miss_without_ai_returns_specific_word_or_sentence_error(client: TestClient, admin_user, monkeypatch, tmp_path) -> None:
     _install_local_dictionary(monkeypatch, tmp_path)
+    monkeypatch.setattr('app.api.dictionary.lookup_online_word', lambda *_args, **_kwargs: None)
     login = client.post('/api/auth/login', json={'username': 'parent', 'password': 'correct horse'})
     headers = {'Cookie': login.headers['set-cookie'].split(';', 1)[0]}
 
@@ -213,7 +252,34 @@ def test_local_miss_without_ai_returns_specific_word_or_sentence_error(client: T
     assert sentence.json()['detail']['code'] == 'DICTIONARY_AI_REQUIRED'
 
 
+def test_dictionary_lookup_uses_free_online_tier_without_ai_configuration(client: TestClient, admin_user, monkeypatch) -> None:
+    from app.schemas.dictionary import DictionaryResult
+    from app.services.online_dictionary import OnlineLookup
+
+    monkeypatch.setattr('app.api.dictionary.lookup_online_word', lambda _session, _child, _text, _owner: OnlineLookup(
+        result=DictionaryResult(
+            source_language='en', target_language='zh', item_type='word', source_text='kumquat',
+            primary_translation='金橘', phonetic="/'kʌmkwɒt/", parts_of_speech=[],
+            alternatives=[], examples=[], usage_note=None,
+            result_source='youdao', source_attribution='在线词典 · 有道（公开接口）',
+        ),
+        cache_hit=False, entry_id='online-entry-1',
+    ))
+    login = client.post('/api/auth/login', json={'username': 'parent', 'password': 'correct horse'})
+    headers = {'Cookie': login.headers['set-cookie'].split(';', 1)[0]}
+
+    response = client.post('/api/dictionary/lookup', json={'text': 'kumquat'}, headers=headers)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body['primary_translation'] == '金橘'
+    assert body['result_source'] == 'youdao'
+    assert body['entry_id'] == 'online-entry-1'
+    assert body['cache_hit'] is False
+
+
 def test_dictionary_history_is_child_scoped_and_deletable(client: TestClient, admin_user, monkeypatch) -> None:
+    monkeypatch.setattr('app.api.dictionary.lookup_online_word', lambda *_args, **_kwargs: None)
     login = client.post('/api/auth/login', json={'username': 'parent', 'password': 'correct horse'})
     headers = {'Cookie': login.headers['set-cookie'].split(';', 1)[0]}
     client.patch('/api/settings/ai', json={
@@ -239,6 +305,7 @@ def test_dictionary_history_is_child_scoped_and_deletable(client: TestClient, ad
 
 
 def test_dictionary_history_uses_created_at_and_id_cursor(client: TestClient, admin_user, monkeypatch) -> None:
+    monkeypatch.setattr('app.api.dictionary.lookup_online_word', lambda *_args, **_kwargs: None)
     login = client.post('/api/auth/login', json={'username': 'parent', 'password': 'correct horse'})
     headers = {'Cookie': login.headers['set-cookie'].split(';', 1)[0]}
     client.patch('/api/settings/ai', json={
