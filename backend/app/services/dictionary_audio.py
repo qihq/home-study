@@ -12,7 +12,11 @@ Verified public sources (no API key required):
 - Youdao dictvoice: ``https://dict.youdao.com/dictvoice?audio=<text>&type=1|2``
   (type=1 British, type=2 American; also reads Chinese words). Note that this
   endpoint serves Youdao's *synthesized* voice, not a human recording, so it is
-  the last resort.
+  the last resort for English. It intermittently returns HTTP 500 for some
+  words, so it is retried once and backed by Baidu.
+- Baidu Translate TTS: ``https://fanyi.baidu.com/gettts`` — reads Chinese (and
+  English) words reliably from behind the NAS network; fallback for Chinese
+  and the final English fallback before configured TTS.
 
 Downloaded audio is cached under ``<data>/tts/dictionary-audio`` and referenced by
 ``TtsAsset`` rows with ``provider='dictionary_audio'``. Failures raise
@@ -51,7 +55,9 @@ DICTIONARY_AUDIO_VERSION = 2
 YOUDAO_DICTVOICE_URL = 'https://dict.youdao.com/dictvoice?audio={text}&type={kind}'
 FREE_DICTIONARY_URL = 'https://api.dictionaryapi.dev/api/v2/entries/en/{word}'
 WIKTIONARY_URL = 'https://en.wiktionary.org/wiki/{word}'
+BAIDU_TTS_URL = 'https://fanyi.baidu.com/gettts?lan={lang}&text={text}&spd=3&source=web'
 USER_AGENT = 'family-learning/1.0 (dictionary audio)'
+BAIDU_USER_AGENT = 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15'
 
 # Failures of a source are remembered in-process so a flaky/unreachable source
 # does not delay every word lookup with a full timeout. Two failures inside the
@@ -90,23 +96,45 @@ def _looks_like_audio(data: bytes) -> bool:
     return data[0] == 0xFF and (data[1] & 0xE0) == 0xE0
 
 
-def _request(url: str, timeout: float) -> bytes:
-    try:
-        with urlopen(Request(url, headers={'User-Agent': USER_AGENT}), timeout=timeout) as response:
-            content_type = response.headers.get_content_type()
-            data = response.read()
-    except OSError as error:
-        raise DictionaryAudioError('DICTIONARY_AUDIO_FETCH_FAILED') from error
-    if len(data) < 64:
-        raise DictionaryAudioError('DICTIONARY_AUDIO_EMPTY')
-    if content_type.startswith('audio/') or _looks_like_audio(data):
-        return data
-    raise DictionaryAudioError('DICTIONARY_AUDIO_UNRECOGNIZED')
+def _request(url: str, timeout: float, user_agent: str = USER_AGENT, retries: int = 1) -> bytes:
+    last_error: DictionaryAudioError | None = None
+    for attempt in range(retries):
+        try:
+            with urlopen(Request(url, headers={'User-Agent': user_agent}), timeout=timeout) as response:
+                content_type = response.headers.get_content_type()
+                data = response.read()
+        except OSError as error:
+            last_error = DictionaryAudioError('DICTIONARY_AUDIO_FETCH_FAILED')
+            if attempt + 1 < retries:
+                time.sleep(0.5)
+                continue
+            raise last_error from error
+        if len(data) < 64:
+            last_error = DictionaryAudioError('DICTIONARY_AUDIO_EMPTY')
+            if attempt + 1 < retries:
+                time.sleep(0.5)
+                continue
+            raise last_error
+        if content_type.startswith('audio/') or _looks_like_audio(data):
+            return data
+        last_error = DictionaryAudioError('DICTIONARY_AUDIO_UNRECOGNIZED')
+        if attempt + 1 < retries:
+            time.sleep(0.5)
+            continue
+        raise last_error
+    raise last_error if last_error is not None else DictionaryAudioError('DICTIONARY_AUDIO_FETCH_FAILED')
 
 
 def _youdao_bytes(text: str, accent: Accent, timeout: float) -> bytes:
     kind = '1' if accent == 'uk' else '2'
-    return _request(YOUDAO_DICTVOICE_URL.format(text=quote(text), kind=kind), timeout)
+    return _request(YOUDAO_DICTVOICE_URL.format(text=quote(text), kind=kind), timeout, retries=2)
+
+
+def _baidu_bytes(text: str, lang: str, timeout: float) -> bytes:
+    return _request(
+        BAIDU_TTS_URL.format(lang=lang, text=quote(text)), timeout,
+        user_agent=BAIDU_USER_AGENT, retries=2,
+    )
 
 
 def _accent_marked(name: str, accent: Accent) -> bool:
@@ -322,10 +350,10 @@ def fetch_word_audio(
     """Fetch single-word pronunciation audio, caching it on disk.
 
     English words try human recordings (Wiktionary/Wikimedia first, Free
-    Dictionary API second) and fall back to the synthesized Youdao voice;
-    Chinese words use Youdao only. Returns ``(path, source)`` where source is
-    ``'wiktionary'``, ``'dictionaryapi.dev'``, ``'dictvoice'`` or ``'cached'``
-    when the file already existed.
+    Dictionary API second) and fall back to synthesized voices (Youdao, then
+    Baidu); Chinese words use Youdao with Baidu as fallback. Returns
+    ``(path, source)`` where source is ``'wiktionary'``, ``'dictionaryapi.dev'``,
+    ``'dictvoice'``, ``'baidu'`` or ``'cached'`` when the file already existed.
     Raises :class:`DictionaryAudioError` when the text is not a single word or
     every source fails; a previously cached file is kept on refresh failures.
     """
@@ -342,6 +370,7 @@ def fetch_word_audio(
         sources.append(('wiktionary', lambda: _wiktionary_bytes(normalized, accent, timeout)))
         sources.append(('dictionaryapi.dev', lambda: _free_dictionary_bytes(normalized, accent, timeout)))
     sources.append(('dictvoice', lambda: _youdao_bytes(normalized, accent, timeout)))
+    sources.append(('baidu', lambda: _baidu_bytes(normalized, 'en' if source_language == 'en' else 'zh', timeout)))
     last_error: DictionaryAudioError | None = None
     for source, fetch in sources:
         if not refresh and (_breaker_open(source) or _miss_fresh(source, normalized, accent)):

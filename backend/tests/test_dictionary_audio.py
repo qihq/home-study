@@ -140,7 +140,7 @@ def test_fetch_word_audio_reads_chinese_words_and_rejects_non_words(monkeypatch,
     module._MISS_CACHE.clear()
     calls = []
 
-    def fake_request(url, timeout):
+    def fake_request(url, timeout, **_kwargs):
         calls.append(url)
         return _mp3(b'x')
 
@@ -303,12 +303,14 @@ def test_circuit_breaker_skips_failing_sources_until_refresh(monkeypatch, tmp_pa
         with pytest.raises(module.DictionaryAudioError):
             module.fetch_word_audio(word, 'en', 'us')
 
-    # apple: 3 sources tried; pear: 3 more (breakers open on 2nd failure);
-    # plum: all three breakers open, nothing is fetched anymore.
-    assert len(calls) == 6
+    # apple: 4 sources tried (dictvoice/baidu retried once each = 2 calls);
+    # pear: 4 more (breakers open on 2nd failure); plum: all breakers open,
+    # nothing is fetched anymore.
+    assert len(calls) == 12
     assert module._breaker_open('wiktionary')
     assert module._breaker_open('dictionaryapi.dev')
     assert module._breaker_open('dictvoice')
+    assert module._breaker_open('baidu')
 
     # breaker state is persisted so a restart keeps skipping the dead sources
     from app.core.config import get_settings
@@ -318,7 +320,7 @@ def test_circuit_breaker_skips_failing_sources_until_refresh(monkeypatch, tmp_pa
     # an explicit refresh bypasses the breaker and retries for real
     with pytest.raises(module.DictionaryAudioError):
         module.fetch_word_audio('plum', 'en', 'us', refresh=True)
-    assert len(calls) == 9
+    assert len(calls) == 18
 
 
 def test_breaker_state_is_loaded_from_disk_after_restart(monkeypatch, tmp_path) -> None:
@@ -340,6 +342,60 @@ def test_breaker_state_is_loaded_from_disk_after_restart(monkeypatch, tmp_path) 
 
     assert module._breaker_open('wiktionary') is True
     assert module._breaker_open('dictvoice') is False
+
+
+def test_chinese_words_fall_back_to_baidu_when_youdao_fails(monkeypatch, tmp_path) -> None:
+    from app.services import dictionary_audio as module
+
+    _install_settings(monkeypatch, tmp_path)
+    module._MISS_CACHE.clear()
+    module._BREAKER_UNTIL.clear()
+    module._FAILURE_TIMES.clear()
+    calls = []
+
+    def fake_urlopen(request, timeout):
+        url = request.full_url
+        calls.append(url)
+        if 'dictvoice' in url:
+            raise OSError('HTTP 500')
+        if 'fanyi.baidu.com' in url:
+            return _FakeResponse(_mp3(b'baidu'))
+        raise AssertionError(f'unexpected url {url}')
+
+    monkeypatch.setattr(module, 'urlopen', fake_urlopen)
+
+    path, source = module.fetch_word_audio('地球', 'zh', 'us')
+
+    assert source == 'baidu'
+    assert path.read_bytes() == _mp3(b'baidu')
+    assert any('fanyi.baidu.com' in url for url in calls)
+
+
+def test_dictvoice_transient_failure_is_retried_before_falling_back(monkeypatch, tmp_path) -> None:
+    from app.services import dictionary_audio as module
+
+    _install_settings(monkeypatch, tmp_path)
+    module._MISS_CACHE.clear()
+    module._BREAKER_UNTIL.clear()
+    module._FAILURE_TIMES.clear()
+    calls = []
+
+    def flaky(request, timeout):
+        url = request.full_url
+        calls.append(url)
+        if 'dictvoice' in url and len([c for c in calls if 'dictvoice' in c]) == 1:
+            raise OSError('transient 500')
+        if 'dictvoice' in url:
+            return _FakeResponse(_mp3(b'youdao-retry'))
+        raise AssertionError(f'unexpected url {url}')
+
+    monkeypatch.setattr(module, 'urlopen', flaky)
+
+    path, source = module.fetch_word_audio('海洋', 'zh', 'us')
+
+    assert source == 'dictvoice'
+    assert path.read_bytes() == _mp3(b'youdao-retry')
+    assert sum('dictvoice' in url for url in calls) == 2
 
 
 def test_prefetch_word_audio_fills_both_accents_and_never_raises(monkeypatch, tmp_path) -> None:
