@@ -2,6 +2,7 @@
 """一键部署/更新 family-learning 到群晖 NAS。
 
 用法：
+    $env:NAS_HOST='<nas-ip>'              # 必填，NAS 地址不写进脚本
     $env:NAS_SSH_PASSWORD='<admin密码>'   # 必填，仅本次会话环境变量，不落盘
     python scripts/deploy-nas.py [--skip-build] [--version v0.3.0]
 
@@ -174,7 +175,7 @@ def deploy(host, user, password, tar, version, skip_build):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--host', default='<nas-ip>')
+    parser.add_argument('--host', default=os.environ.get('NAS_HOST', ''), help='NAS address, or set NAS_HOST')
     parser.add_argument('--user', default='admin')
     parser.add_argument('--version', default=None)
     parser.add_argument('--skip-build', action='store_true', help='reuse an existing dist tar instead of rebuilding')
@@ -184,6 +185,10 @@ def main():
     password = os.environ.get('NAS_SSH_PASSWORD', '')
     if not password:
         print('请先设置环境变量 NAS_SSH_PASSWORD（NAS 管理员密码），仅用于本次会话。', file=sys.stderr)
+        sys.exit(2)
+
+    if not args.host:
+        print('请通过 --host 或环境变量 NAS_HOST 指定 NAS 地址（例如 $env:NAS_HOST=\'<nas-ip>\'）；地址不写进脚本。', file=sys.stderr)
         sys.exit(2)
 
     if args.tar:

@@ -74,6 +74,7 @@ A family-learning PWA for Synology NAS. It supports Chinese and English reading 
 > **推荐：一键部署脚本**。本机装好 Docker（含 buildx）与 `pip install paramiko` 后：
 >
 > ```powershell
+> $env:NAS_HOST='<NAS地址>'             # 仅本次会话，不落盘、不写进脚本
 > $env:NAS_SSH_PASSWORD='<admin密码>'   # 仅本次会话，不落盘
 > python scripts/deploy-nas.py --version v0.3.1
 > ```

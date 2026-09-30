@@ -5,6 +5,7 @@
 本地 Windows 机器执行（需 `docker` + `buildx` 与 `pip install paramiko`）：
 
 ```powershell
+$env:NAS_HOST='<NAS地址>'             # 仅本次会话，不落盘、不写进脚本
 $env:NAS_SSH_PASSWORD='<admin密码>'   # 仅本次会话，不落盘、不写进脚本
 python scripts/deploy-nas.py --version v0.3.1
 ```
