@@ -44,7 +44,7 @@ def test_dictionary_audio_returns_authenticated_asset_for_a_ready_selected_voice
     audio_path = tmp_path / 'apple.wav'
     audio_path.write_bytes(b'wav')
     monkeypatch.setattr('app.api.dictionary.generate_text_with_voice', lambda *_args: audio_path)
-    response = client.post(f'/api/dictionary/entries/{entry_id}/audio', json={'voice_version_id': voice_id}, headers=headers)
+    response = client.post(f'/api/dictionary/entries/{entry_id}/audio', json={'source': 'custom', 'voice_version_id': voice_id}, headers=headers)
 
     assert response.status_code == 200
     assert response.json() == {'asset_id': response.json()['asset_id'], 'source': 'voice_clone'}
@@ -120,14 +120,14 @@ def test_dictionary_audio_and_asset_are_not_accessible_to_another_user(client: T
     audio_path.write_bytes(b'owner-wav')
     monkeypatch.setattr('app.api.dictionary.generate_text_with_voice', lambda *_args: audio_path)
     owner_audio = client.post(
-        f'/api/dictionary/entries/{entry_id}/audio', json={'voice_version_id': voice_id}, headers=owner_headers,
+        f'/api/dictionary/entries/{entry_id}/audio', json={'source': 'custom', 'voice_version_id': voice_id}, headers=owner_headers,
     )
     assert owner_audio.status_code == 200
 
     attacker_login = client.post('/api/auth/login', json={'username': 'other-parent', 'password': 'different horse'})
     attacker_headers = {'Cookie': attacker_login.headers['set-cookie'].split(';', 1)[0]}
     attacker_audio = client.post(
-        f'/api/dictionary/entries/{entry_id}/audio', json={'voice_version_id': voice_id}, headers=attacker_headers,
+        f'/api/dictionary/entries/{entry_id}/audio', json={'source': 'custom', 'voice_version_id': voice_id}, headers=attacker_headers,
     )
     attacker_download = client.get(f"/api/tts-assets/{owner_audio.json()['asset_id']}/audio", headers=attacker_headers)
 
@@ -175,8 +175,8 @@ def test_dictionary_audio_prefers_free_dictionary_source_for_words(client: TestC
     audio_file = tmp_path / 'apple.mp3'
     audio_file.write_bytes(b'ID3' + b'\x00' * 60 + b'real-mp3')
 
-    def fake_ensure(session, text, source_language, accent='us', owner_user_id=None, regenerate=False, timeout=10):
-        assert (text, source_language, accent, owner_user_id) == ('apple', 'en', 'us', user_id)
+    def fake_ensure(session, text, source_language, accent='us', owner_user_id=None, regenerate=False, timeout=10, mode='preferred'):
+        assert (text, source_language, accent, owner_user_id, mode) == ('apple', 'en', 'us', user_id, 'standard')
         assert timeout == 5.0
         asset = TtsAsset(
             cache_key='f' * 64, provider='dictionary_audio', model='dictvoice', voice=accent,
@@ -192,6 +192,7 @@ def test_dictionary_audio_prefers_free_dictionary_source_for_words(client: TestC
     assert response.status_code == 200
     audio = client.get(f"/api/tts-assets/{response.json()['asset_id']}/audio", headers=headers)
     assert audio.content == b'ID3' + b'\x00' * 60 + b'real-mp3'
+    assert response.json()['source'] == 'standard_audio'
     assert audio.headers['content-type'].startswith('audio/mpeg')
 
 
@@ -357,7 +358,8 @@ def test_dictionary_audio_native_source_returns_dictionary_asset(client: TestCli
     audio_file = tmp_path / 'apple.mp3'
     audio_file.write_bytes(b'ID3' + b'\x00' * 60 + b'native')
 
-    def fake_ensure(session, text, source_language, accent='us', owner_user_id=None, regenerate=False, timeout=10):
+    def fake_ensure(session, text, source_language, accent='us', owner_user_id=None, regenerate=False, timeout=10, mode='preferred'):
+        assert mode == 'human'
         asset = TtsAsset(
             cache_key='native' * 16, provider='dictionary_audio', model='wiktionary', voice=accent,
             locale='en-US', speed=1.0, normalized_text=text, path=str(audio_file),
@@ -370,7 +372,7 @@ def test_dictionary_audio_native_source_returns_dictionary_asset(client: TestCli
     response = client.post(f'/api/dictionary/entries/{entry_id}/audio', json={'source': 'native', 'accent': 'uk'}, headers=headers)
 
     assert response.status_code == 200
-    assert response.json()['source'] == 'dictionary_audio'
+    assert response.json()['source'] == 'human_recording'
     assert client.get(f"/api/tts-assets/{response.json()['asset_id']}/audio", headers=headers).content == b'ID3' + b'\x00' * 60 + b'native'
 
 
@@ -389,7 +391,7 @@ def test_dictionary_audio_native_source_explains_when_no_recording_exists(client
     response = client.post(f'/api/dictionary/entries/{entry_id}/audio', json={'source': 'native'}, headers=headers)
 
     assert response.status_code == 422
-    assert response.json()['detail']['code'] == 'DICTIONARY_NATIVE_UNAVAILABLE'
+    assert response.json()['detail']['code'] == 'DICTIONARY_HUMAN_UNAVAILABLE'
 
 
 def test_dictionary_audio_configured_source_forces_tts_even_for_words(client: TestClient, admin_user, monkeypatch, tmp_path) -> None:
@@ -439,3 +441,57 @@ def test_dictionary_audio_custom_source_requires_a_ready_voice(client: TestClien
 
     assert response.status_code == 422
     assert response.json()['detail']['code'] == 'VOICE_VERSION_REQUIRED'
+
+
+
+def test_dictionary_audio_legacy_default_maps_to_standard_and_falls_back_to_configured_tts(client: TestClient, admin_user, monkeypatch, tmp_path) -> None:
+    from app.db.session import get_session_factory
+    from app.models.dictionary import DictionaryEntry
+
+    login = client.post('/api/auth/login', json={'username': 'parent', 'password': 'correct horse'})
+    headers = {'Cookie': login.headers['set-cookie'].split(';', 1)[0]}
+    with get_session_factory()() as session:
+        entry = DictionaryEntry(query_hash='d' * 64, result_json=_word_entry_json())
+        session.add(entry); session.commit(); entry_id = entry.id
+
+    modes: list[str] = []
+    def unavailable(_session, _text, _language, **kwargs):
+        modes.append(kwargs['mode'])
+        return None
+
+    audio_path = tmp_path / 'fallback.wav'
+    audio_path.write_bytes(b'fallback')
+    monkeypatch.setattr('app.api.dictionary.ensure_word_audio_asset', unavailable)
+    monkeypatch.setattr('app.api.dictionary.generate_configured_tts', lambda *_args: audio_path)
+
+    response = client.post(
+        f'/api/dictionary/entries/{entry_id}/audio', json={'source': 'default'}, headers=headers,
+    )
+
+    assert response.status_code == 200
+    assert response.json()['source'] == 'configured_tts'
+    assert modes == ['standard']
+
+
+def test_dictionary_prefetch_requests_only_standard_american_audio(monkeypatch) -> None:
+    from app.api import dictionary as module
+
+    calls = []
+    monkeypatch.setattr(
+        module,
+        'prefetch_word_audio',
+        lambda text, language, **kwargs: calls.append((text, language, kwargs)),
+    )
+
+    class ImmediateThread:
+        def __init__(self, *, target, **_kwargs):
+            self.target = target
+
+        def start(self):
+            self.target()
+
+    monkeypatch.setattr(module.threading, 'Thread', ImmediateThread)
+
+    module._start_audio_prefetch('apple', 'en')
+
+    assert calls == [('apple', 'en', {'accents': ('us',), 'mode': 'standard'})]

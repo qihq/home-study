@@ -9,14 +9,14 @@ class SpellingOcrError(Exception):
     pass
 
 
-def recognize_spelling_image(image: bytes, mime_type: str, *, api_key: str, base_url: str, model: str, timeout_seconds: int) -> list[str]:
+def recognize_spelling_image(image: bytes, mime_type: str, *, api_key: str, base_url: str, model: str, timeout_seconds: int, temperature: float | None = None) -> list[str]:
     encoded = base64.b64encode(image).decode()
     prompt = (
         'Read the English spelling words in this image. Return JSON only in the form '
         '{"words":["word one","word two"]}. Keep original spelling, omit non-English text, and do not invent words.'
     )
     try:
-        raw = OpenAiChatClient(api_key, base_url, model, timeout_seconds).complete([{
+        raw = OpenAiChatClient(api_key, base_url, model, timeout_seconds, temperature=temperature).complete([{
             'role': 'user', 'content': [
                 {'type': 'text', 'text': prompt},
                 {'type': 'image_url', 'image_url': {'url': f'data:{mime_type};base64,{encoded}'}},

@@ -65,7 +65,7 @@ it('limits input to 2,000 characters and plays English with the selected ready v
 })
 
 it('switches between American and British accent for English words', async () => {  const user = userEvent.setup()
-  const onPlay = vi.fn().mockResolvedValue('dictionary_audio')
+  const onPlay = vi.fn().mockResolvedValue('standard_audio')
   render(<DictionaryPage onLookup={vi.fn().mockResolvedValue(WORD_RESULT)} onPlay={onPlay} onMarkUnknown={vi.fn()} />)
 
   await user.type(screen.getByLabelText('查询内容'), 'apple')
@@ -77,22 +77,29 @@ it('switches between American and British accent for English words', async () =>
   await user.click(screen.getByRole('button', { name: '播放发音' }))
 
   expect(screen.getByRole('button', { name: '英音' })).toHaveAttribute('aria-pressed', 'true')
-  expect(onPlay).toHaveBeenCalledWith('entry-apple', { source: 'default', voice_version_id: undefined, regenerate: false, accent: 'uk' })
+  expect(onPlay).toHaveBeenCalledWith('entry-apple', { source: 'standard', voice_version_id: undefined, regenerate: false, accent: 'uk' })
 })
 
-it('offers native dictionary and configured TTS sources with feedback labels', async () => {
+it('defaults to standard pronunciation and offers human recording separately', async () => {
   const user = userEvent.setup()
-  const onPlay = vi.fn().mockResolvedValue('dictionary_audio')
+  const onPlay = vi.fn().mockResolvedValue('standard_audio')
   render(<DictionaryPage onLookup={vi.fn().mockResolvedValue(WORD_RESULT)} onPlay={onPlay} onMarkUnknown={vi.fn()} />)
 
   await user.type(screen.getByLabelText('查询内容'), 'apple')
   await user.click(screen.getByRole('button', { name: '查询' }))
   await screen.findByText('苹果')
 
-  await user.selectOptions(screen.getByLabelText('朗读声音'), 'native')
+  expect(screen.getByLabelText('朗读声音')).toHaveValue('standard')
+  expect(screen.getByRole('option', { name: '标准发音（默认）' })).toBeEnabled()
   await user.click(screen.getByRole('button', { name: '播放发音' }))
-  expect(onPlay).toHaveBeenCalledWith('entry-apple', { source: 'native', voice_version_id: undefined, regenerate: false, accent: 'us' })
-  expect(screen.getByRole('status')).toHaveTextContent('正在播放辞典原生发音')
+  expect(onPlay).toHaveBeenCalledWith('entry-apple', { source: 'standard', voice_version_id: undefined, regenerate: false, accent: 'us' })
+  expect(screen.getByRole('status')).toHaveTextContent('正在播放标准发音')
+
+  onPlay.mockResolvedValue('human_recording')
+  await user.selectOptions(screen.getByLabelText('朗读声音'), 'human')
+  await user.click(screen.getByRole('button', { name: '播放发音' }))
+  expect(onPlay).toHaveBeenLastCalledWith('entry-apple', { source: 'human', voice_version_id: undefined, regenerate: false, accent: 'us' })
+  expect(screen.getByRole('status')).toHaveTextContent('正在播放真人录音')
 
   onPlay.mockResolvedValue('configured_tts')
   await user.selectOptions(screen.getByLabelText('朗读声音'), 'configured')
@@ -101,32 +108,63 @@ it('offers native dictionary and configured TTS sources with feedback labels', a
   expect(screen.getByRole('status')).toHaveTextContent('正在播放AI 生成发音')
 })
 
-it('disables the native source for phrases and sentences', async () => {
+it.each([
+  {
+    name: 'sentences',
+    result: {
+      source_language: 'en' as const, target_language: 'zh' as const, item_type: 'sentence' as const,
+      source_text: 'I like apples.', primary_translation: '我喜欢苹果。', phonetic: null,
+      parts_of_speech: [], alternatives: [], examples: [], usage_note: null, cache_hit: false, entry_id: 'entry-1',
+    },
+  },
+  {
+    name: 'Chinese words',
+    result: {
+      ...WORD_RESULT,
+      entry_id: 'entry-chinese', source_language: 'zh' as const, target_language: 'en' as const,
+      source_text: '苹果', primary_translation: 'apple',
+    },
+  },
+])('disables human recordings for $name', async ({ result }) => {
   const user = userEvent.setup()
-  render(<DictionaryPage onLookup={vi.fn().mockResolvedValue({
-    source_language: 'en', target_language: 'zh', item_type: 'sentence', source_text: 'I like apples.',
-    primary_translation: '我喜欢苹果。', phonetic: null, parts_of_speech: [], alternatives: [], examples: [],
-    usage_note: null, cache_hit: false, entry_id: 'entry-1',
-  })} onMarkUnknown={vi.fn()} />)
+  render(<DictionaryPage onLookup={vi.fn().mockResolvedValue(result)} onMarkUnknown={vi.fn()} />)
 
-  await user.type(screen.getByLabelText('查询内容'), 'I like apples.')
+  await user.type(screen.getByLabelText('查询内容'), result.source_text)
   await user.click(screen.getByRole('button', { name: '查询' }))
-  await screen.findByText('我喜欢苹果。')
+  await screen.findByText(result.primary_translation)
 
-  expect(screen.getByRole('option', { name: '辞典原生发音' })).toBeDisabled()
+  expect(screen.getByRole('option', { name: '真人录音' })).toBeDisabled()
 })
 
 it('shows the backend message when playback fails', async () => {
   const user = userEvent.setup()
-  const onPlay = vi.fn().mockRejectedValue(new ApiError('DICTIONARY_NATIVE_UNAVAILABLE', '该条目没有辞典原生发音，请改用 AI 生成或克隆声音。', 422))
+  const onPlay = vi.fn().mockRejectedValue(new ApiError('DICTIONARY_HUMAN_UNAVAILABLE', '该条目没有真人录音，请改用标准发音。', 422))
   render(<DictionaryPage onLookup={vi.fn().mockResolvedValue(WORD_RESULT)} onPlay={onPlay} onMarkUnknown={vi.fn()} />)
 
   await user.type(screen.getByLabelText('查询内容'), 'apple')
   await user.click(screen.getByRole('button', { name: '查询' }))
   await screen.findByText('苹果')
+  await user.selectOptions(screen.getByLabelText('朗读声音'), 'human')
   await user.click(screen.getByRole('button', { name: '播放发音' }))
 
-  expect(await screen.findByRole('status')).toHaveTextContent('该条目没有辞典原生发音，请改用 AI 生成或克隆声音。')
+  expect(await screen.findByRole('status')).toHaveTextContent('该条目没有真人录音，请改用标准发音。')
+})
+
+
+it('shows source-specific loading text while audio is being prepared', async () => {
+  const user = userEvent.setup()
+  let resolvePlay: ((outcome: 'human_recording') => void) | undefined
+  const onPlay = vi.fn().mockImplementation(() => new Promise<'human_recording'>(resolve => { resolvePlay = resolve }))
+  render(<DictionaryPage onLookup={vi.fn().mockResolvedValue(WORD_RESULT)} onPlay={onPlay} onMarkUnknown={vi.fn()} />)
+
+  await user.type(screen.getByLabelText('查询内容'), 'apple')
+  await user.click(screen.getByRole('button', { name: '查询' }))
+  await user.selectOptions(screen.getByLabelText('朗读声音'), 'human')
+  await user.click(screen.getByRole('button', { name: '播放发音' }))
+
+  expect(screen.getByRole('button', { name: '真人录音加载中' })).toBeDisabled()
+  resolvePlay?.('human_recording')
+  expect(await screen.findByRole('status')).toHaveTextContent('正在播放真人录音')
 })
 
 it('can force pronunciation regeneration while preserving the selected voice', async () => {

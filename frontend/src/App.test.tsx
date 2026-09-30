@@ -1,11 +1,12 @@
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { vi } from "vitest";
+import { afterEach, vi } from "vitest";
 import { api, apiAudio, apiBlob } from "./api/client";
 import { App } from "./App";
 import { AppShell } from "./ui/AppShell";
 
 vi.mock("./api/client", () => ({
+  ApiError: class ApiError extends Error {},
   api: vi.fn(),
   apiAudio: vi.fn(),
   apiBlob: vi.fn(),
@@ -19,15 +20,21 @@ vi.mock("./lib/recordingStore", () => ({
   createIndexedDbRecordingStore: () => ({ listSessions: async () => [] }),
 }));
 
+let audioPlayError: Error | null = null;
+
 class TestAudio {
   addEventListener() {}
-  play = vi.fn().mockResolvedValue(undefined);
+  play = vi.fn().mockImplementation(() => audioPlayError ? Promise.reject(audioPlayError) : Promise.resolve());
 }
 
 vi.stubGlobal("Audio", TestAudio);
 vi.stubGlobal("URL", {
   createObjectURL: vi.fn(() => "blob:test"),
   revokeObjectURL: vi.fn(),
+});
+
+afterEach(() => {
+  audioPlayError = null;
 });
 
 it("groups mobile navigation into four clear entries and keeps settings reachable", async () => {
@@ -198,6 +205,36 @@ it("wires the dictionary and AI settings pages to their API endpoints", async ()
   expect(mockedApi).toHaveBeenCalledWith("/settings/ai/test", {
     method: "POST",
   });
+});
+
+it("releases dictionary audio blob URLs when playback fails", async () => {
+  const user = userEvent.setup();
+  const mockedApi = vi.mocked(api);
+  const mockedApiAudio = vi.mocked(apiAudio);
+  mockedApiAudio.mockResolvedValue(new Blob(["wav"], { type: "audio/wav" }));
+  mockedApi.mockImplementation(async (path: string) => {
+    if (path === "/setup/status") return { needs_initial_admin: false };
+    if (path === "/voice-versions?ready=true") return [];
+    if (path === "/dictionary/lookup") return {
+      entry_id: "entry-1", source_language: "en", target_language: "zh", item_type: "word",
+      source_text: "apple", primary_translation: "苹果", phonetic: null,
+      parts_of_speech: [], alternatives: [], examples: [], usage_note: null, cache_hit: false,
+    };
+    if (path === "/dictionary/entries/entry-1/audio") return { asset_id: "asset-1", source: "standard_audio" };
+    throw new Error(`Unexpected API call: ${path}`);
+  });
+  audioPlayError = new Error("autoplay blocked");
+
+  render(<App />);
+  await user.click(await screen.findByRole("button", { name: "登录" }));
+  await user.click((await screen.findAllByRole("button", { name: "辞典" }))[0]);
+  await user.type(screen.getByLabelText("查询内容"), "apple");
+  await user.click(screen.getByRole("button", { name: "查询" }));
+  await screen.findByText("苹果");
+  await user.click(screen.getByRole("button", { name: "播放发音" }));
+
+  await waitFor(() => expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:test"));
+  expect(screen.getByRole("status")).toHaveTextContent("播放失败");
 });
 
 it("opens the unknown-items page from the dictionary and creates a learning list", async () => {

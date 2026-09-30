@@ -423,14 +423,137 @@ def test_prefetch_word_audio_fills_both_accents_and_never_raises(monkeypatch, tm
 
     monkeypatch.setattr(module, 'urlopen', fake_urlopen)
 
-    assert module.prefetch_word_audio('apple', 'en') == {'us': 'wiktionary', 'uk': 'wiktionary'}
+    assert module.prefetch_word_audio('apple', 'en', accents=('us', 'uk'), mode='human') == {'us': 'wiktionary', 'uk': 'wiktionary'}
 
     # the play path now hits the disk cache with zero network requests
     before = len(calls)
-    path, source = module.fetch_word_audio('apple', 'en', 'us')
+    path, source = module.fetch_word_audio('apple', 'en', 'us', mode='human')
     assert (source, len(calls)) == ('cached', before)
     assert path.read_bytes() == _mp3(b'us')
 
     # failures stay silent and leave the cache untouched
     monkeypatch.setattr(module, 'urlopen', lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError('down')))
-    assert module.prefetch_word_audio('pear', 'en') == {}
+    assert module.prefetch_word_audio('pear', 'en', accents=('us', 'uk'), mode='human') == {}
+
+
+
+def test_standard_mode_uses_fast_synthesized_sources_without_probing_human_sources(monkeypatch, tmp_path) -> None:
+    from app.services import dictionary_audio as module
+
+    _install_settings(monkeypatch, tmp_path)
+    module._MISS_CACHE.clear()
+    module._BREAKER_UNTIL.clear()
+    module._FAILURE_TIMES.clear()
+    module._AUDIO_FLIGHTS.clear()
+    calls: list[str] = []
+
+    def fake_urlopen(request, timeout):
+        url = request.full_url
+        calls.append(url)
+        if 'dictvoice' in url:
+            return _FakeResponse(_mp3(b'standard'))
+        raise AssertionError(f'standard mode must not request {url}')
+
+    monkeypatch.setattr(module, 'urlopen', fake_urlopen)
+
+    path, source = module.fetch_word_audio('apple', 'en', 'us', mode='standard')
+
+    assert source == 'dictvoice'
+    assert path.read_bytes() == _mp3(b'standard')
+    assert len(calls) == 1 and 'dictvoice' in calls[0]
+
+
+def test_human_mode_never_falls_back_to_synthesized_sources(monkeypatch, tmp_path) -> None:
+    from app.services import dictionary_audio as module
+
+    _install_settings(monkeypatch, tmp_path)
+    module._MISS_CACHE.clear()
+    module._BREAKER_UNTIL.clear()
+    module._FAILURE_TIMES.clear()
+    module._AUDIO_FLIGHTS.clear()
+    calls: list[str] = []
+
+    def fake_urlopen(request, timeout):
+        url = request.full_url
+        calls.append(url)
+        if 'wiktionary.org' in url:
+            return _FakeResponse(_wiktionary_html([]), 'text/html')
+        if 'dictionaryapi.dev' in url:
+            return _FakeResponse(_free_dictionary_payload('apple', []), 'application/json')
+        raise AssertionError(f'human mode must not request {url}')
+
+    monkeypatch.setattr(module, 'urlopen', fake_urlopen)
+
+    with pytest.raises(module.DictionaryAudioError, match='DICTIONARY_AUDIO_NOT_FOUND'):
+        module.fetch_word_audio('apple', 'en', 'us', mode='human')
+
+    assert len(calls) == 2
+    assert all('dictvoice' not in url and 'fanyi.baidu.com' not in url for url in calls)
+
+
+def test_standard_and_human_modes_keep_independent_file_and_asset_caches(session, monkeypatch, tmp_path) -> None:
+    from app.models.tts_asset import TtsAsset
+    from app.services import dictionary_audio as module
+
+    _install_settings(monkeypatch, tmp_path)
+    module._MISS_CACHE.clear()
+    module._BREAKER_UNTIL.clear()
+    module._FAILURE_TIMES.clear()
+    module._AUDIO_FLIGHTS.clear()
+    monkeypatch.setattr(module, '_youdao_bytes', lambda *_args: _mp3(b'standard'))
+    monkeypatch.setattr(module, '_wiktionary_bytes', lambda *_args: _mp3(b'human'))
+
+    standard_path, _ = module.fetch_word_audio('apple', 'en', 'us', mode='standard')
+    human_path, _ = module.fetch_word_audio('apple', 'en', 'us', mode='human')
+    standard_asset = module.ensure_word_audio_asset(session, 'apple', 'en', owner_user_id='user-1', mode='standard')
+    human_asset = module.ensure_word_audio_asset(session, 'apple', 'en', owner_user_id='user-1', mode='human')
+
+    assert standard_path != human_path
+    assert standard_path.read_bytes() == _mp3(b'standard')
+    assert human_path.read_bytes() == _mp3(b'human')
+    assert standard_asset is not None and human_asset is not None
+    assert standard_asset.id != human_asset.id
+    assert standard_asset.cache_key != human_asset.cache_key
+    assert session.query(TtsAsset).filter_by(provider='dictionary_audio').count() == 2
+
+
+def test_concurrent_prefetch_and_play_share_one_inflight_download(monkeypatch, tmp_path) -> None:
+    import threading
+    import time
+    from concurrent.futures import ThreadPoolExecutor
+
+    from app.services import dictionary_audio as module
+
+    _install_settings(monkeypatch, tmp_path)
+    module._MISS_CACHE.clear()
+    module._BREAKER_UNTIL.clear()
+    module._FAILURE_TIMES.clear()
+    module._AUDIO_FLIGHTS.clear()
+    started = threading.Event()
+    release = threading.Event()
+    calls = 0
+    calls_lock = threading.Lock()
+
+    def slow_youdao(*_args):
+        nonlocal calls
+        with calls_lock:
+            calls += 1
+        started.set()
+        assert release.wait(2)
+        return _mp3(b'one-download')
+
+    monkeypatch.setattr(module, '_youdao_bytes', slow_youdao)
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        first = executor.submit(module.fetch_word_audio, 'apple', 'en', 'us', 5, False, 'standard')
+        assert started.wait(1)
+        second = executor.submit(module.fetch_word_audio, 'apple', 'en', 'us', 5, False, 'standard')
+        time.sleep(0.1)
+        assert calls == 1
+        release.set()
+        first_result = first.result(timeout=2)
+        second_result = second.result(timeout=2)
+
+    assert calls == 1
+    assert first_result == second_result
+    assert first_result[0].read_bytes() == _mp3(b'one-download')

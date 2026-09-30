@@ -46,7 +46,7 @@ class DictionaryAudioRequest(BaseModel):
     voice_version_id: str | None = None
     regenerate: bool = False
     accent: Literal['uk', 'us'] = 'us'
-    source: Literal['default', 'native', 'configured', 'custom'] = 'default'
+    source: Literal['standard', 'human', 'configured', 'custom', 'default', 'native'] = 'standard'
 
 
 def _start_audio_prefetch(text: str, source_language: str) -> None:
@@ -57,7 +57,7 @@ def _start_audio_prefetch(text: str, source_language: str) -> None:
     """
     def worker() -> None:
         try:
-            prefetch_word_audio(text, source_language)
+            prefetch_word_audio(text, source_language, accents=('us',), mode='standard')
         except Exception:
             pass
 
@@ -101,12 +101,14 @@ def lookup(payload: DictionaryLookupRequest, session: DbSession, user: Annotated
         code = 'DICTIONARY_LOCAL_MISS' if local_eligible else 'DICTIONARY_AI_REQUIRED'
         message = '本地和在线词典都没有找到这个词；配置 AI 后可继续查询。' if local_eligible else '短语和句子查询需要先配置辞典 AI。'
         raise HTTPException(409, detail={'code': code, 'message': message})
-    client = OpenAiChatClient(ai_api_key(config), config.base_url, config.model, config.timeout_seconds)
+    client = OpenAiChatClient(ai_api_key(config), config.base_url, config.model, config.timeout_seconds, temperature=config.temperature)
     client.fingerprint = f'{config.protocol}:{config.base_url}:{config.model}:{config.temperature}'
     try:
         found = lookup_dictionary(session, _current_child(session).id, payload.text, payload.source_language, client, prompt_version='v2', owner_user_id=user.id)
     except OpenAiChatError as error:
-        raise HTTPException(502, detail={'code': str(error), 'message': 'Dictionary AI request failed'}) from error
+        # 把上游真正说的话（例如「需要 OpenCode Go 订阅」）带出来，而不是笼统报网关错误。
+        message = '辞典 AI 请求失败' + (f'：{error.detail}' if error.detail else '')
+        raise HTTPException(502, detail={'code': error.code, 'message': message}) from error
     except DictionaryServiceError as error:
         raise HTTPException(422, detail={'code': str(error), 'message': 'Dictionary result is invalid'}) from error
     _prefetch_word_audio(found.result)
@@ -128,15 +130,19 @@ def dictionary_audio(entry_id: str, payload: DictionaryAudioRequest, session: Db
     result = json.loads(entry.result_json)
     source_language = result.get('source_language', 'en')
     configured = get_tts_config(session)
-    source = payload.source
+    # Compatibility for older installed PWAs. New clients only send the four
+    # canonical values and always default word playback to standard audio.
+    source = {'default': 'standard', 'native': 'human'}.get(payload.source, payload.source)
     force_tts = source in ('configured', 'custom')
     selected_voice_id: str | None = None
     if source == 'custom':
-        selected_voice_id = payload.voice_version_id or (configured.voice_version_id if configured and configured.pronunciation_source == 'custom' else None)
+        selected_voice_id = payload.voice_version_id or (
+            configured.voice_version_id
+            if configured and configured.pronunciation_source == 'custom'
+            else None
+        )
         if selected_voice_id is None:
             raise HTTPException(422, detail={'code': 'VOICE_VERSION_REQUIRED', 'message': '请先选择已就绪的克隆声音。'})
-    elif source == 'default':
-        selected_voice_id = payload.voice_version_id or (configured.voice_version_id if configured and configured.pronunciation_source == 'custom' else None)
     voice = session.get(VoiceVersion, selected_voice_id) if selected_voice_id else None
     if selected_voice_id and (voice is None or voice.status != 'ready'):
         raise HTTPException(409, detail={'code': 'VOICE_VERSION_NOT_READY', 'message': 'Selected voice is not ready'})
@@ -147,16 +153,19 @@ def dictionary_audio(entry_id: str, payload: DictionaryAudioRequest, session: Db
         require_resource_owner(session, speaker.owner_user_id, user)
     is_word = result.get('item_type') == 'word'
     if voice is None and not force_tts and is_word:
-        # Single words get real dictionary audio (free sources, cached); fall back to TTS on failure.
         dictionary_asset = ensure_word_audio_asset(
             session, result['source_text'], source_language,
             accent=payload.accent, owner_user_id=user.id, regenerate=payload.regenerate,
-            timeout=INTERACTIVE_FETCH_TIMEOUT,
+            timeout=INTERACTIVE_FETCH_TIMEOUT, mode=source,
         )
         if dictionary_asset is not None:
-            return {'asset_id': dictionary_asset.id, 'source': 'dictionary_audio'}
-    if source == 'native':
-        detail = {'code': 'DICTIONARY_NATIVE_UNAVAILABLE', 'message': '该条目暂时没有可用的辞典原生发音（可能未收录或发音源暂时无法访问），请改用 AI 生成或克隆声音。'}
+            outcome = 'standard_audio' if source == 'standard' else 'human_recording'
+            return {'asset_id': dictionary_asset.id, 'source': outcome}
+    if source == 'human':
+        detail = {
+            'code': 'DICTIONARY_HUMAN_UNAVAILABLE',
+            'message': '该条目暂时没有可用的真人录音，请改用标准发音。',
+        }
         raise HTTPException(422, detail=detail)
     text = result['source_text'] if source_language == 'en' else result['primary_translation']
     voice_key = voice.id if voice else 'default'

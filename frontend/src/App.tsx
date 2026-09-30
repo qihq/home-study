@@ -442,7 +442,7 @@ function DictionaryScreen({
   const play = async (
     entryId: string,
     options: {
-      source: "default" | "native" | "configured" | "custom";
+      source: "standard" | "human" | "configured" | "custom";
       voice_version_id?: string;
       regenerate: boolean;
       accent: "uk" | "us";
@@ -458,13 +458,23 @@ function DictionaryScreen({
     const source = URL.createObjectURL(
       await apiAudio(`/tts-assets/${data.asset_id}/audio`),
     );
-    const audio = new Audio(source);
-    audio.addEventListener("ended", () => URL.revokeObjectURL(source), {
-      once: true,
-    });
-    await audio.play();
+    let released = false;
+    const release = () => {
+      if (released) return;
+      released = true;
+      URL.revokeObjectURL(source);
+    };
+    try {
+      const audio = new Audio(source);
+      audio.addEventListener("ended", release, { once: true });
+      await audio.play();
+    } catch (error) {
+      release();
+      throw error;
+    }
     return data.source as
-      | "dictionary_audio"
+      | "standard_audio"
+      | "human_recording"
       | "configured_tts"
       | "voice_clone";
   };

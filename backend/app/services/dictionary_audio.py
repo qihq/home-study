@@ -10,23 +10,24 @@ Verified public sources (no API key required):
   (Wiktionary data: phonetics with UK/US mp3/ogg audio URLs). Kept as a
   redundancy fallback; its media proxy can be flaky.
 - Youdao dictvoice: ``https://dict.youdao.com/dictvoice?audio=<text>&type=1|2``
-  (type=1 British, type=2 American; also reads Chinese words). Note that this
-  endpoint serves Youdao's *synthesized* voice, not a human recording, so it is
-  the last resort for English. It intermittently returns HTTP 500 for some
-  words, so it is retried once and backed by Baidu.
-- Baidu Translate TTS: ``https://fanyi.baidu.com/gettts`` — reads Chinese (and
-  English) words reliably from behind the NAS network; fallback for Chinese
-  and the final English fallback before configured TTS.
+  (type=1 British, type=2 American; also reads Chinese words). This synthesized
+  voice is the first source for the fast ``standard`` mode and is backed by
+  Baidu when unavailable.
+- Baidu Translate TTS: ``https://fanyi.baidu.com/gettts`` -- reads Chinese (and
+  English) words reliably from behind the NAS network; fallback for the
+  ``standard`` mode before configured TTS.
+
+The public dictionary UI keeps two independent source chains and caches:
+``standard`` uses Youdao then Baidu, while ``human`` uses Wiktionary then Free
+Dictionary and never falls back to synthesized audio. The internal ``preferred``
+mode preserves the older human-first chain for dictation and learning workers.
 
 Downloaded audio is cached under ``<data>/tts/dictionary-audio`` and referenced by
 ``TtsAsset`` rows with ``provider='dictionary_audio'``. Failures raise
-:class:`DictionaryAudioError` so callers can fall back to configured TTS.
-
-Human recordings are preferred over synthesized audio for single English words:
-the MiMo TTS models are broadcast/performance oriented and do not guarantee
-faithful single-word pronunciation, and Youdao dictvoice is synthesized too.
-Ogg recordings are transcoded to mp3 when ffmpeg is available (Safari cannot
-decode Ogg Vorbis); otherwise the .ogg file is kept and served as ``audio/ogg``.
+:class:`DictionaryAudioError` so callers can fall back to configured TTS where
+appropriate. Ogg recordings are transcoded to mp3 when ffmpeg is available
+(Safari cannot decode Ogg Vorbis); otherwise the .ogg file is kept and served
+as ``audio/ogg``.
 """
 
 import hashlib
@@ -34,10 +35,13 @@ import json
 import re
 import shutil
 import subprocess
+import threading
 import time
 from collections.abc import Callable
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
+from uuid import uuid4
 from urllib.parse import quote, unquote
 from urllib.request import Request, urlopen
 
@@ -48,10 +52,10 @@ from app.core.config import get_settings
 from app.models.tts_asset import TtsAsset
 
 Accent = Literal['uk', 'us']
+AudioMode = Literal['preferred', 'standard', 'human']
 
-# Bumped from 1: English words now prefer human dictionary recordings over the
-# synthesized Youdao voice, so previously cached files must be re-fetched.
-DICTIONARY_AUDIO_VERSION = 2
+# Bumped from 2: standard and human pronunciation now use independent caches.
+DICTIONARY_AUDIO_VERSION = 3
 YOUDAO_DICTVOICE_URL = 'https://dict.youdao.com/dictvoice?audio={text}&type={kind}'
 FREE_DICTIONARY_URL = 'https://api.dictionaryapi.dev/api/v2/entries/en/{word}'
 WIKTIONARY_URL = 'https://en.wiktionary.org/wiki/{word}'
@@ -79,6 +83,17 @@ _WIKIMEDIA_AUDIO = re.compile(r'//upload\.wikimedia\.org/[^"\s\\<>]+\.(?:ogg|oga
 
 class DictionaryAudioError(Exception):
     pass
+
+
+@dataclass
+class _AudioFlight:
+    event: threading.Event = field(default_factory=threading.Event)
+    result: tuple[Path, str] | None = None
+    error_code: str | None = None
+
+
+_AUDIO_FLIGHTS: dict[str, _AudioFlight] = {}
+_AUDIO_FLIGHTS_LOCK = threading.Lock()
 
 
 def is_single_word(text: str, source_language: str) -> bool:
@@ -223,8 +238,10 @@ def _free_dictionary_bytes(word: str, accent: Accent, timeout: float) -> bytes:
     return _request(preferred, timeout)
 
 
-def _cache_key(text: str, accent: Accent) -> str:
-    return hashlib.sha256(f'dictionary-audio:v{DICTIONARY_AUDIO_VERSION}\n{text}\n{accent}'.encode()).hexdigest()
+def _cache_key(text: str, accent: Accent, mode: AudioMode = 'preferred') -> str:
+    return hashlib.sha256(
+        f'dictionary-audio:v{DICTIONARY_AUDIO_VERSION}\n{mode}\n{text}\n{accent}'.encode()
+    ).hexdigest()
 
 
 def _base_dir(key: str) -> Path:
@@ -344,35 +361,34 @@ def _record_source_success(source: str) -> None:
     _save_persisted_breaker_state()
 
 
-def fetch_word_audio(
-    text: str, source_language: str, accent: Accent = 'us', timeout: float = 10, refresh: bool = False,
-) -> tuple[Path, str]:
-    """Fetch single-word pronunciation audio, caching it on disk.
-
-    English words try human recordings (Wiktionary/Wikimedia first, Free
-    Dictionary API second) and fall back to synthesized voices (Youdao, then
-    Baidu); Chinese words use Youdao with Baidu as fallback. Returns
-    ``(path, source)`` where source is ``'wiktionary'``, ``'dictionaryapi.dev'``,
-    ``'dictvoice'``, ``'baidu'`` or ``'cached'`` when the file already existed.
-    Raises :class:`DictionaryAudioError` when the text is not a single word or
-    every source fails; a previously cached file is kept on refresh failures.
-    """
-    normalized = ' '.join(text.strip().split())
-    if not is_single_word(normalized, source_language):
-        raise DictionaryAudioError('DICTIONARY_AUDIO_NOT_A_WORD')
-    key = _cache_key(normalized, accent)
-    if not refresh:
-        cached = _cached_path(key)
-        if cached is not None:
-            return cached, 'cached'
-    sources: list[tuple[str, Callable[[], bytes]]] = []
+def _sources_for_mode(
+    normalized: str, source_language: str, accent: Accent, timeout: float, mode: AudioMode,
+) -> list[tuple[str, Callable[[], bytes]]]:
+    human_sources: list[tuple[str, Callable[[], bytes]]] = []
     if source_language == 'en':
-        sources.append(('wiktionary', lambda: _wiktionary_bytes(normalized, accent, timeout)))
-        sources.append(('dictionaryapi.dev', lambda: _free_dictionary_bytes(normalized, accent, timeout)))
-    sources.append(('dictvoice', lambda: _youdao_bytes(normalized, accent, timeout)))
-    sources.append(('baidu', lambda: _baidu_bytes(normalized, 'en' if source_language == 'en' else 'zh', timeout)))
+        human_sources = [
+            ('wiktionary', lambda: _wiktionary_bytes(normalized, accent, timeout)),
+            ('dictionaryapi.dev', lambda: _free_dictionary_bytes(normalized, accent, timeout)),
+        ]
+    standard_sources: list[tuple[str, Callable[[], bytes]]] = [
+        ('dictvoice', lambda: _youdao_bytes(normalized, accent, timeout)),
+        ('baidu', lambda: _baidu_bytes(normalized, 'en' if source_language == 'en' else 'zh', timeout)),
+    ]
+    if mode == 'human':
+        return human_sources
+    if mode == 'standard':
+        return standard_sources
+    if mode == 'preferred':
+        return human_sources + standard_sources
+    raise DictionaryAudioError('DICTIONARY_AUDIO_MODE_INVALID')
+
+
+def _fetch_word_audio_uncached(
+    normalized: str, source_language: str, accent: Accent, timeout: float, refresh: bool, mode: AudioMode,
+) -> tuple[Path, str]:
+    key = _cache_key(normalized, accent, mode)
     last_error: DictionaryAudioError | None = None
-    for source, fetch in sources:
+    for source, fetch in _sources_for_mode(normalized, source_language, accent, timeout, mode):
         if not refresh and (_breaker_open(source) or _miss_fresh(source, normalized, accent)):
             continue
         try:
@@ -390,30 +406,91 @@ def fetch_word_audio(
                 data, suffix = transcoded, '.mp3'
         target = _new_path(key, suffix)
         target.parent.mkdir(parents=True, exist_ok=True)
-        partial = target.with_suffix(f'{suffix}.part')
-        partial.write_bytes(data)
-        partial.replace(target)
+        partial = target.with_name(f'{target.name}.{uuid4().hex}.part')
+        try:
+            partial.write_bytes(data)
+            partial.replace(target)
+        finally:
+            try:
+                partial.unlink(missing_ok=True)
+            except OSError:
+                pass
         return target, source
     raise DictionaryAudioError('DICTIONARY_AUDIO_NOT_FOUND') from last_error
 
 
-def dictionary_asset_cache_key(text: str, accent: Accent, owner: str) -> str:
-    return hashlib.sha256(f'dictionary-audio:v{DICTIONARY_AUDIO_VERSION}:{owner}:{accent}:{text}'.encode()).hexdigest()
+def fetch_word_audio(
+    text: str, source_language: str, accent: Accent = 'us', timeout: float = 10, refresh: bool = False,
+    mode: AudioMode = 'preferred',
+) -> tuple[Path, str]:
+    """Fetch and cache one pronunciation mode for a single word.
+
+    ``standard`` uses Youdao then Baidu, ``human`` uses Wiktionary then Free
+    Dictionary, and the internal ``preferred`` mode preserves the legacy
+    human-first chain for dictation and learning-item workers. Concurrent calls
+    for the same mode, normalized word and accent share one in-process fetch.
+    """
+    normalized = ' '.join(text.strip().split())
+    if not is_single_word(normalized, source_language):
+        raise DictionaryAudioError('DICTIONARY_AUDIO_NOT_A_WORD')
+    key = _cache_key(normalized, accent, mode)
+    if not refresh:
+        cached = _cached_path(key)
+        if cached is not None:
+            return cached, 'cached'
+
+    with _AUDIO_FLIGHTS_LOCK:
+        flight = _AUDIO_FLIGHTS.get(key)
+        owner = flight is None
+        if flight is None:
+            flight = _AudioFlight()
+            _AUDIO_FLIGHTS[key] = flight
+
+    if not owner:
+        flight.event.wait()
+        if flight.result is not None:
+            return flight.result
+        raise DictionaryAudioError(flight.error_code or 'DICTIONARY_AUDIO_FETCH_FAILED')
+
+    result: tuple[Path, str] | None = None
+    error_code: str | None = None
+    try:
+        result = _fetch_word_audio_uncached(normalized, source_language, accent, timeout, refresh, mode)
+        return result
+    except DictionaryAudioError as error:
+        error_code = str(error)
+        raise
+    except Exception as error:
+        error_code = 'DICTIONARY_AUDIO_FETCH_FAILED'
+        raise DictionaryAudioError(error_code) from error
+    finally:
+        with _AUDIO_FLIGHTS_LOCK:
+            flight.result = result
+            flight.error_code = error_code
+            flight.event.set()
+            if _AUDIO_FLIGHTS.get(key) is flight:
+                _AUDIO_FLIGHTS.pop(key, None)
+
+
+def dictionary_asset_cache_key(
+    text: str, accent: Accent, owner: str, mode: AudioMode = 'preferred',
+) -> str:
+    return hashlib.sha256(
+        f'dictionary-audio:v{DICTIONARY_AUDIO_VERSION}:{mode}:{owner}:{accent}:{text}'.encode()
+    ).hexdigest()
 
 
 def prefetch_word_audio(
-    text: str, source_language: str, accents: tuple[Accent, ...] = ('us', 'uk'), timeout: float = 5,
+    text: str, source_language: str, accents: tuple[Accent, ...] = ('us',), timeout: float = 5,
+    mode: AudioMode = 'standard',
 ) -> dict[str, str]:
-    """Best-effort cache fill for the accents a user is likely to pick.
-
-    Called after dictionary lookups so the play button hits the disk cache
-    instead of the network. Never raises; returns ``{accent: source}`` for
-    every accent that produced audio.
-    """
+    """Best-effort cache fill; by default only the standard American audio."""
     fetched: dict[str, str] = {}
     for accent in accents:
         try:
-            _path, source = fetch_word_audio(text, source_language, accent, timeout=timeout)
+            _path, source = fetch_word_audio(
+                text, source_language, accent, timeout=timeout, mode=mode,
+            )
             fetched[accent] = source
         except DictionaryAudioError:
             continue
@@ -423,31 +500,29 @@ def prefetch_word_audio(
 def ensure_word_audio_asset(
     session: Session, text: str, source_language: str, *,
     accent: Accent = 'us', owner_user_id: str | None = None, regenerate: bool = False, timeout: float = 10,
+    mode: AudioMode = 'preferred',
 ) -> TtsAsset | None:
-    """Return a ready ``TtsAsset`` backed by free dictionary audio, or None.
-
-    Returns ``None`` when the text is not a single word or every audio source
-    fails, so callers can fall back to configured TTS. ``regenerate`` bypasses
-    both the asset and the file cache and re-fetches from the network.
-    """
+    """Return a ready mode-specific ``TtsAsset`` backed by word audio, or None."""
     normalized = ' '.join(text.strip().split())
     if not is_single_word(normalized, source_language):
         return None
     owner = owner_user_id or 'shared'
-    key = dictionary_asset_cache_key(normalized, accent, owner)
+    key = dictionary_asset_cache_key(normalized, accent, owner, mode)
     if not regenerate:
         existing = session.scalar(select(TtsAsset).where(TtsAsset.cache_key == key, TtsAsset.status == 'ready'))
-        if existing is not None:
+        if existing is not None and Path(existing.path).is_file():
             return existing
     try:
-        path, source = fetch_word_audio(normalized, source_language, accent, timeout=timeout, refresh=regenerate)
+        path, source = fetch_word_audio(
+            normalized, source_language, accent, timeout=timeout, refresh=regenerate, mode=mode,
+        )
     except DictionaryAudioError:
         return None
     locale = 'en-US' if source_language == 'en' else 'zh-CN'
     asset = session.scalar(select(TtsAsset).where(TtsAsset.cache_key == key))
     if asset is None:
         asset = TtsAsset(
-            cache_key=key, provider='dictionary_audio', model=source if source != 'cached' else 'dictvoice',
+            cache_key=key, provider='dictionary_audio', model=source if source != 'cached' else mode,
             voice=accent, locale=locale, speed=1.0, normalized_text=normalized[:160], path=str(path),
         )
         if owner_user_id is not None:

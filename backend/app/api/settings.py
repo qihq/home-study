@@ -151,14 +151,17 @@ def test_ai_connection(session: DbSession, _user: Annotated[User, Depends(requir
     try:
         OpenAiChatClient(
             ai_api_key(config), config.base_url, config.model, config.timeout_seconds,
+            temperature=config.temperature,
         ).complete([{'role': 'user', 'content': 'apple'}])
     except OpenAiChatError as error:
         messages = {
             'AI_AUTH_FAILED': 'AI 服务认证失败',
             'AI_TIMEOUT': 'AI 服务请求超时',
         }
-        code = str(error)
-        raise HTTPException(502, detail={'code': code, 'message': messages.get(code, 'AI 服务请求失败')}) from error
+        message = messages.get(error.code, 'AI 服务请求失败')
+        if error.detail:
+            message = f'{message}：{error.detail}'
+        raise HTTPException(502, detail={'code': error.code, 'message': message}) from error
     return {
         'ok': True,
         'display_name': config.display_name,
@@ -187,14 +190,17 @@ def update_spelling_ocr(payload: SpellingOcrConfigPayload, session: DbSession, _
 @router.post('/settings/spelling-ocr/test')
 def test_spelling_ocr_connection(session: DbSession, _user: Annotated[User, Depends(require_user)]) -> dict:
     try:
-        secret, base_url, model, timeout_seconds, _temperature = spelling_ocr_provider(session)
+        secret, base_url, model, timeout_seconds, temperature = spelling_ocr_provider(session)
     except ValueError as error:
         raise HTTPException(409, detail={'code': str(error), 'message': 'Spelling recognition AI is not configured'}) from error
     started = monotonic()
     try:
-        OpenAiChatClient(secret, base_url, model, timeout_seconds).complete([{'role': 'user', 'content': 'Reply with {"ok":true}.'}])
+        OpenAiChatClient(
+            secret, base_url, model, timeout_seconds, temperature=temperature,
+        ).complete([{'role': 'user', 'content': 'Reply with {"ok":true}.'}])
     except OpenAiChatError as error:
-        raise HTTPException(502, detail={'code': str(error), 'message': 'Spelling recognition AI request failed'}) from error
+        message = 'Spelling recognition AI request failed' + (f': {error.detail}' if error.detail else '')
+        raise HTTPException(502, detail={'code': error.code, 'message': message}) from error
     return {'ok': True, 'model': model, 'latency_ms': int((monotonic() - started) * 1000)}
 
 

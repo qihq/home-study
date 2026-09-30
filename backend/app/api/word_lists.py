@@ -61,12 +61,13 @@ async def recognize_image(
     if not image or len(image) > 10 * 1024 * 1024:
         raise HTTPException(422, detail={'code': 'OCR_IMAGE_INVALID', 'message': 'Image must be between 1 byte and 10 MB'})
     try:
-        secret, base_url, model, timeout_seconds, _temperature = spelling_ocr_provider(session)
-        words = recognize_spelling_image(image, file.content_type or 'image/jpeg', api_key=secret, base_url=base_url, model=model, timeout_seconds=timeout_seconds)
+        secret, base_url, model, timeout_seconds, temperature = spelling_ocr_provider(session)
+        words = recognize_spelling_image(image, file.content_type or 'image/jpeg', api_key=secret, base_url=base_url, model=model, timeout_seconds=timeout_seconds, temperature=temperature)
     except ValueError as error:
         raise HTTPException(409, detail={'code': str(error), 'message': 'Spelling recognition AI is not configured'}) from error
     except OpenAiChatError as error:
-        raise HTTPException(502, detail={'code': str(error), 'message': 'Spelling recognition AI request failed'}) from error
+        message = 'Spelling recognition AI request failed' + (f': {error.detail}' if error.detail else '')
+        raise HTTPException(502, detail={'code': error.code, 'message': message}) from error
     except SpellingOcrError as error:
         raise HTTPException(422, detail={'code': str(error), 'message': 'No usable English words were recognized'}) from error
     return {'words': words}
