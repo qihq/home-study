@@ -11,6 +11,29 @@ function preferredMime() {
 }
 
 const NO_MIC_MESSAGE = '没有获取到麦克风声音，请在浏览器与系统设置中允许麦克风权限后重试。'
+const NO_RECORDING_MESSAGE = '这次没有录到任何画面：录制过程中锁屏或切到别的应用会让摄像头中断。请保持页面在前台重新录制。'
+const RECORDING_STALLED_MESSAGE = '录制似乎已经中断（超过 20 秒没有新片段），可能是锁屏或切到了其他应用。建议结束录制后重新开始。'
+const SUBMIT_FAILED_MESSAGE = '提交失败，视频片段仍保存在本机。可以点「补传并提交」重试，或「放弃并重新开始」。'
+
+// 分片每 4 秒产生一个；这么久没有新片段就说明录制已经断了。
+const RECORDING_STALL_MS = 20_000
+// 锁屏/切后台会让音视频轨失效，此时 MediaRecorder.stop() 可能永远不派发 stop 事件。
+const RECORDER_STOP_TIMEOUT_MS = 10_000
+
+function stopRecorder(instance: MediaRecorder, timeoutMs = RECORDER_STOP_TIMEOUT_MS) {
+  return new Promise<void>(resolve => {
+    let settled = false
+    const finish = () => {
+      if (settled) return
+      settled = true
+      window.clearTimeout(timer)
+      resolve()
+    }
+    const timer = window.setTimeout(finish, timeoutMs)
+    instance.addEventListener('stop', finish, { once: true })
+    try { instance.stop() } catch { finish() }
+  })
+}
 
 function hasLiveAudio(stream: MediaStream) {
   const audioTracks = stream.getAudioTracks()
@@ -34,6 +57,34 @@ function usableAfterLock(stream: MediaStream) {
 async function digest(blob: Blob) {
   const bytes = await crypto.subtle.digest('SHA-256', await blob.arrayBuffer())
   return [...new Uint8Array(bytes)].map(byte => byte.toString(16).padStart(2, '0')).join('')
+}
+
+// 录制每 4 秒产出一个分片。上传必须限流：每个在飞的分片都会占用服务端一条数据库连接，
+// 不限并发时网络一变慢就会堆到连接池耗尽（QueuePool timeout → 500），整段录制报废。
+const MAX_CONCURRENT_UPLOADS = 2
+const UPLOAD_RETRY_DELAYS_MS = [1000, 3000, 8000]
+
+class UploadError extends Error {
+  constructor(readonly status: number) { super(`UPLOAD_FAILED_${status}`) }
+}
+
+// 4xx（除 429）是确定性失败：录制已被删除、分片冲突、哈希不符，重试没有意义。
+function isRetryableUploadError(error: unknown) {
+  return error instanceof UploadError && (error.status === 0 || error.status === 429 || error.status >= 500)
+}
+
+function createUploadLimiter(limit: number) {
+  const waiting: Array<() => void> = []
+  let active = 0
+  return async function withSlot<T>(task: () => Promise<T>): Promise<T> {
+    if (active >= limit) await new Promise<void>(resolve => waiting.push(resolve))
+    active += 1
+    try { return await task() }
+    finally {
+      active -= 1
+      waiting.shift()?.()
+    }
+  }
 }
 
 type RecordingPageProps = {
@@ -65,9 +116,16 @@ export function RecordingPage({ language, onBack, onHome, onOpenVideos, recovery
   const recordingId = useRef<string | null>(null)
   const sequence = useRef(0)
   const pendingUploads = useRef(new Set<Promise<void>>())
+  const withUploadSlot = useRef<ReturnType<typeof createUploadLimiter> | null>(null)
+  withUploadSlot.current ??= createUploadLimiter(MAX_CONCURRENT_UPLOADS)
   const startedAt = useRef<number | null>(null)
+  const lastChunkAt = useRef<number | null>(null)
   const [abandonedRecoveryId, setAbandonedRecoveryId] = useState<string | null>(null)
-  const effectiveRecovery = abandonedRecoveryId === recovery?.recordingId ? undefined : recovery
+  const [localRecovery, setLocalRecovery] = useState<RecordingSession | null>(null)
+  // 刚录完但提交失败的会话只存在于本机，优先于登录时读到的 recovery，
+  // 否则用户会看到「开始录制」又开一段新的，把上一段变成永远清理不掉的残留。
+  const candidateRecovery = localRecovery ?? recovery ?? undefined
+  const effectiveRecovery = candidateRecovery?.recordingId === abandonedRecoveryId ? undefined : candidateRecovery
   const [state, setState] = useState<RecordingState>(recovery ? 'error' : 'idle')
   const [camera, setCamera] = useState<'user' | 'environment'>('user')
   const [message, setMessage] = useState('请保持页面在前台，录制片段会自动上传到 NAS。')
@@ -81,15 +139,50 @@ export function RecordingPage({ language, onBack, onHome, onOpenVideos, recovery
     const timer = window.setInterval(update, 250)
     return () => window.clearInterval(timer)
   }, [state])
+  useEffect(() => {
+    // 锁屏/切后台后 MediaRecorder 会静默停摆：不报错，也不再产生片段。
+    // 这里主动发现「录了半天其实什么都没录到」，而不是等用户点完提交才发现。
+    if (state !== 'recording') return
+    const timer = window.setInterval(() => {
+      const last = lastChunkAt.current
+      if (last !== null && performance.now() - last > RECORDING_STALL_MS) setMessage(RECORDING_STALLED_MESSAGE)
+    }, 5_000)
+    return () => window.clearInterval(timer)
+  }, [state])
 
   async function upload(sequenceNumber: number, blob: Blob) {
     const id = recordingId.current
     if (!id) return
     await store.put(id, sequenceNumber, blob)
     const hash = await digest(blob)
-    const response = await fetch(`/api/recordings/${id}/chunks/${sequenceNumber}`, { method: 'PUT', body: blob, credentials: 'include', headers: { 'X-Chunk-Sha256': hash, 'Content-Type': blob.type || 'video/mp4' } })
-    if (!response.ok) throw new Error('UPLOAD_FAILED')
+    let response: Response
+    try {
+      response = await fetch(`/api/recordings/${id}/chunks/${sequenceNumber}`, { method: 'PUT', body: blob, credentials: 'include', headers: { 'X-Chunk-Sha256': hash, 'Content-Type': blob.type || 'video/mp4' } })
+    } catch { throw new UploadError(0) }
+    if (!response.ok) throw new UploadError(response.status)
     await store.acknowledge(id, sequenceNumber)
+  }
+
+  async function uploadWithRetry(sequenceNumber: number, blob: Blob) {
+    for (let attempt = 0; ; attempt += 1) {
+      try { await upload(sequenceNumber, blob); return }
+      catch (error) {
+        const delay = UPLOAD_RETRY_DELAYS_MS[attempt]
+        if (delay === undefined || !isRetryableUploadError(error)) throw error
+        await new Promise(resolve => window.setTimeout(resolve, delay))
+      }
+    }
+  }
+
+  function enqueueUpload(sequenceNumber: number, blob: Blob) {
+    return withUploadSlot.current!(() => uploadWithRetry(sequenceNumber, blob))
+  }
+
+  async function drainPendingUploads() {
+    while (pendingUploads.current.size > 0) {
+      setMessage(`正在上传剩余片段（还有 ${pendingUploads.current.size} 个）…`)
+      await Promise.all([...pendingUploads.current])
+    }
   }
 
   async function resumePending() {
@@ -98,7 +191,7 @@ export function RecordingPage({ language, onBack, onHome, onOpenVideos, recovery
     const known = await api<{ received_sequences: number[] }>(`/recordings/${id}/chunks`)
     const received = new Set(known.received_sequences)
     for (const item of await store.list(id)) {
-      if (!received.has(item.sequence)) await upload(item.sequence, item.blob)
+      if (!received.has(item.sequence)) await enqueueUpload(item.sequence, item.blob)
       else await store.acknowledge(id, item.sequence)
     }
   }
@@ -128,7 +221,7 @@ export function RecordingPage({ language, onBack, onHome, onOpenVideos, recovery
           stopStream(stream)
           throw new Error('NO_AUDIO_TRACK')
         }
-        await new Promise<void>(resolve => { oldRecorder.addEventListener('stop', () => resolve(), { once: true }); oldRecorder.stop() })
+        await stopRecorder(oldRecorder)
         oldStream.getTracks().forEach(track => track.stop())
         if (video.current) { video.current.srcObject = stream; await video.current.play() }
         const instance = new MediaRecorder(stream, preferredMime() ? { mimeType: preferredMime() } : undefined)
@@ -145,7 +238,8 @@ export function RecordingPage({ language, onBack, onHome, onOpenVideos, recovery
       const id = recordingId.current
       const task = (async () => {
         if (id) await store.putSession({ recordingId: id, language, nextSequence: sequence.current, ended: false })
-        await upload(sequenceNumber, event.data)
+        lastChunkAt.current = performance.now()
+        await enqueueUpload(sequenceNumber, event.data)
       })().catch(() => { setState('error'); setMessage('片段上传失败，已保留在本机缓存，请恢复网络后重试。') }).finally(() => pendingUploads.current.delete(task))
       pendingUploads.current.add(task)
     }
@@ -176,24 +270,53 @@ export function RecordingPage({ language, onBack, onHome, onOpenVideos, recovery
       }
       const instance = new MediaRecorder(stream, preferredMime() ? { mimeType: preferredMime() } : undefined)
       configureRecorder(instance)
-      instance.start(4000); recorder.current = instance; startedAt.current = performance.now(); setElapsedMs(0); setState('recording'); setMessage('录制中，片段正在保存到 NAS。')
+      instance.start(4000); recorder.current = instance; startedAt.current = performance.now(); lastChunkAt.current = performance.now(); setElapsedMs(0); setLocalRecovery(null); setState('recording'); setMessage('录制中，片段正在保存到 NAS。')
     } catch (error) { setState('error'); setMessage(error instanceof Error && error.message === 'NO_AUDIO_TRACK' ? NO_MIC_MESSAGE : '无法打开摄像头或麦克风，请检查浏览器权限和 HTTPS。') }
   }
 
   async function stop() {
-    if (!recorder.current || !recordingId.current) return
+    const instance = recorder.current
+    const id = recordingId.current
+    if (!instance || !id) {
+      // 以前这里直接 return，按钮点了毫无反应。现在明确告诉用户发生了什么。
+      setState('error')
+      setMessage('录制已经中断，请重新开始录制。')
+      return
+    }
     if (startedAt.current !== null) setElapsedMs(performance.now() - startedAt.current)
     startedAt.current = null
     setState('uploading')
-    await new Promise<void>(resolve => { recorder.current!.addEventListener('stop', () => resolve(), { once: true }); recorder.current!.stop() })
-    recorder.current.stream.getTracks().forEach(track => track.stop())
-    await Promise.all([...pendingUploads.current])
-    await store.putSession({ recordingId: recordingId.current, language, nextSequence: sequence.current, ended: true })
-    await resumePending()
-    const completed = await api<{ missing_sequences: number[] }>(`/recordings/${recordingId.current}/complete`, { method: 'POST', body: JSON.stringify({ final_chunk_count: sequence.current }) })
-    if (completed.missing_sequences.length) { setState('error'); setMessage('仍有片段等待上传，请保持页面打开后重试。'); return }
-    await store.removeSession(recordingId.current)
-    setState('complete'); setMessage('源视频已提交 NAS，正在自动生成可保存到手机的 720p 版本。')
+    setMessage('正在提交视频…')
+    try {
+      await stopRecorder(instance)
+      instance.stream.getTracks().forEach(track => track.stop())
+      recorder.current = null
+      if (sequence.current === 0) {
+        // 一个片段都没有：录制中途被打断了。服务端那条空录制没有保留价值，直接放弃。
+        try { await api(`/recordings/${id}/abandon`, { method: 'POST' }) } catch { /* 服务端可能已无此录制 */ }
+        await store.removeSession(id)
+        setState('error')
+        setMessage(NO_RECORDING_MESSAGE)
+        return
+      }
+      await drainPendingUploads()
+      await store.putSession({ recordingId: id, language, nextSequence: sequence.current, ended: true })
+      await resumePending()
+      const completed = await api<{ missing_sequences: number[] }>(`/recordings/${id}/complete`, { method: 'POST', body: JSON.stringify({ final_chunk_count: sequence.current }) })
+      if (completed.missing_sequences.length) {
+        setLocalRecovery({ recordingId: id, language, nextSequence: sequence.current, ended: true })
+        setState('error')
+        setMessage('仍有片段等待上传，请保持页面打开后重试。')
+        return
+      }
+      await store.removeSession(id)
+      setState('complete'); setMessage('源视频已提交 NAS，正在自动生成可保存到手机的 720p 版本。')
+    } catch {
+      // 以前没有 try/catch：任何一步抛错都会把界面永远留在「正在提交视频…」。
+      setLocalRecovery({ recordingId: id, language, nextSequence: sequence.current, ended: true })
+      setState('error')
+      setMessage(SUBMIT_FAILED_MESSAGE)
+    }
   }
 
   async function submitRecoveredRecording() {
@@ -205,6 +328,7 @@ export function RecordingPage({ language, onBack, onHome, onOpenVideos, recovery
       const completed = await api<{ missing_sequences: number[] }>(`/recordings/${effectiveRecovery.recordingId}/complete`, { method: 'POST', body: JSON.stringify({ final_chunk_count: effectiveRecovery.nextSequence }) })
       if (completed.missing_sequences.length) throw new Error('MISSING_CHUNKS')
       await store.removeSession(effectiveRecovery.recordingId)
+      setLocalRecovery(null)
       setState('complete'); setMessage('源视频已提交 NAS，正在自动生成 720p 版本。')
     } catch { setState('error'); setMessage('仍有片段等待上传，请恢复网络后重试。') }
   }
@@ -214,6 +338,7 @@ export function RecordingPage({ language, onBack, onHome, onOpenVideos, recovery
     try { await api(`/recordings/${effectiveRecovery.recordingId}/abandon`, { method: 'POST' }) } catch { /* 服务端可能已无此录制 */ }
     await store.removeSession(effectiveRecovery.recordingId)
     setAbandonedRecoveryId(effectiveRecovery.recordingId)
+    setLocalRecovery(null)
     recordingId.current = null; sequence.current = 0
     setState('idle')
     setMessage('已放弃之前的录制，现在可以开始新的录制。')

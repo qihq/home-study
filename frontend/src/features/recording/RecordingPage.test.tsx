@@ -23,11 +23,23 @@ vi.mock('../../lib/recordingStore', async importOriginal => {
 
 class FakeMediaRecorder extends EventTarget {
   static isTypeSupported() { return true }
+  static instances: FakeMediaRecorder[] = []
+  static silentStop = false
   stream: MediaStream
   ondataavailable: ((event: BlobEvent) => void) | null = null
-  constructor(stream: MediaStream) { super(); this.stream = stream }
+  constructor(stream: MediaStream) { super(); this.stream = stream; FakeMediaRecorder.instances.push(this) }
   start() {}
-  stop() { this.dispatchEvent(new Event('stop')) }
+  stop() {
+    // 锁屏/切后台后 iOS 的 MediaRecorder 可能永远不派发 stop 事件
+    if (FakeMediaRecorder.silentStop) return
+    this.dispatchEvent(new Event('stop'))
+  }
+}
+
+const fakeChunk = { size: 1, type: 'video/mp4', arrayBuffer: async () => new ArrayBuffer(8) } as unknown as Blob
+
+function emitChunk(recorder: FakeMediaRecorder, count = 1) {
+  for (let index = 0; index < count; index += 1) recorder.ondataavailable?.({ data: fakeChunk } as BlobEvent)
 }
 
 const videoTrack = { stop: vi.fn(), readyState: 'live' }
@@ -37,6 +49,9 @@ const videoOnlyStream = { getTracks: () => [videoTrack], getVideoTracks: () => [
 
 beforeEach(() => {
   vi.clearAllMocks()
+  vi.unstubAllGlobals()
+  FakeMediaRecorder.instances = []
+  FakeMediaRecorder.silentStop = false
   vi.mocked(api).mockImplementation(async path => {
     if (path === '/recordings') return { id: 'recording-1' } as never
     if (path.endsWith('/complete')) return { missing_sequences: [] } as never
@@ -44,6 +59,8 @@ beforeEach(() => {
     return {} as never
   })
   vi.stubGlobal('MediaRecorder', FakeMediaRecorder)
+  vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, status: 200 }))
+  vi.stubGlobal('crypto', { subtle: { digest: vi.fn().mockResolvedValue(new Uint8Array(32).buffer) } })
   Object.defineProperty(navigator, 'mediaDevices', { configurable: true, value: { getUserMedia: vi.fn().mockResolvedValue(stream) } })
   vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue()
 })
@@ -131,6 +148,89 @@ it('re-requests camera and microphone when the previously opened stream lost its
   liveAudioTrack.readyState = 'live'
 })
 
+it('caps parallel chunk uploads so a slow network cannot exhaust the server connection pool', async () => {
+  let inFlight = 0
+  let peak = 0
+  const release: Array<() => void> = []
+  const fetchMock = vi.fn(() => {
+    inFlight += 1
+    peak = Math.max(peak, inFlight)
+    return new Promise<Response>(resolve => {
+      release.push(() => { inFlight -= 1; resolve({ ok: true, status: 200 } as Response) })
+    })
+  })
+  vi.stubGlobal('fetch', fetchMock)
+
+  const user = userEvent.setup()
+  render(<RecordingPage language="english" onBack={vi.fn()} onHome={vi.fn()} onOpenVideos={vi.fn()} />)
+  await user.click(screen.getByRole('button', { name: '开始录制' }))
+
+  const recorder = FakeMediaRecorder.instances.at(-1)!
+  const chunk = { size: 1, type: 'video/mp4', arrayBuffer: async () => new ArrayBuffer(8) } as unknown as Blob
+  for (let index = 0; index < 6; index += 1) recorder.ondataavailable?.({ data: chunk } as BlobEvent)
+
+  await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2))
+  expect(peak).toBe(2)
+  for (let guard = 0; guard < 200; guard += 1) {
+    if (!release.length && fetchMock.mock.calls.length === 6 && inFlight === 0) break
+    while (release.length) release.shift()!()
+    await new Promise(resolve => setTimeout(resolve, 0))
+  }
+
+  expect(fetchMock).toHaveBeenCalledTimes(6)
+  expect(peak).toBe(2)
+  expect(inFlight).toBe(0)
+})
+
+it('finishes submission instead of hanging when the recorder never fires stop', async () => {
+  // 回归：锁屏/切后台后 iOS 的 MediaRecorder.stop() 不派发 stop 事件，
+  // 旧代码会永远 await 在那个 Promise 上，「结束录制」按钮永久停在提交中。
+  vi.useFakeTimers({ shouldAdvanceTime: true })
+  const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime })
+  FakeMediaRecorder.silentStop = true
+  render(<RecordingPage language="english" onBack={vi.fn()} onHome={vi.fn()} onOpenVideos={vi.fn()} />)
+
+  await user.click(screen.getByRole('button', { name: '开始录制' }))
+  await vi.advanceTimersByTimeAsync(4_000)
+  await user.click(screen.getByRole('button', { name: '结束录制' }))
+  await vi.advanceTimersByTimeAsync(11_000)
+
+  expect(await screen.findByText(/没有录到任何画面/)).toBeVisible()
+  expect(screen.queryByRole('button', { name: '正在提交视频…' })).not.toBeInTheDocument()
+  vi.useRealTimers()
+})
+
+it('abandons the server recording and explains itself when nothing was captured', async () => {
+  const user = userEvent.setup()
+  render(<RecordingPage language="english" onBack={vi.fn()} onHome={vi.fn()} onOpenVideos={vi.fn()} />)
+
+  await user.click(screen.getByRole('button', { name: '开始录制' }))
+  await user.click(screen.getByRole('button', { name: '结束录制' }))
+
+  expect(await screen.findByText(/没有录到任何画面/)).toBeVisible()
+  expect(api).toHaveBeenCalledWith('/recordings/recording-1/abandon', { method: 'POST' })
+  expect(api).not.toHaveBeenCalledWith('/recordings/recording-1/complete', expect.anything())
+})
+
+it('keeps a failed submission recoverable instead of leaving the page stuck', async () => {
+  vi.mocked(api).mockImplementation(async path => {
+    if (path === '/recordings') return { id: 'recording-1' } as never
+    if (path.endsWith('/chunks')) return { received_sequences: [] } as never
+    if (path.endsWith('/complete')) throw new Error('network down')
+    return {} as never
+  })
+  const user = userEvent.setup()
+  render(<RecordingPage language="english" onBack={vi.fn()} onHome={vi.fn()} onOpenVideos={vi.fn()} />)
+
+  await user.click(screen.getByRole('button', { name: '开始录制' }))
+  emitChunk(FakeMediaRecorder.instances.at(-1)!)
+  await user.click(screen.getByRole('button', { name: '结束录制' }))
+
+  expect(await screen.findByText(/提交失败/)).toBeVisible()
+  expect(screen.getByRole('button', { name: '补传并提交' })).toBeVisible()
+  expect(screen.getByRole('button', { name: '放弃并重新开始' })).toBeVisible()
+})
+
 it('freezes duration and offers explicit home and video-library destinations after submission', async () => {
   vi.useFakeTimers({ shouldAdvanceTime: true })
   const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime })
@@ -140,6 +240,7 @@ it('freezes duration and offers explicit home and video-library destinations aft
 
   await user.click(screen.getByRole('button', { name: '开始录制' }))
   await vi.advanceTimersByTimeAsync(2200)
+  emitChunk(FakeMediaRecorder.instances.at(-1)!)
   await user.click(screen.getByRole('button', { name: '结束录制' }))
   const homeButton = await screen.findByRole('button', { name: '返回主页' })
   const completion = homeButton.closest('.recording-complete-card') as HTMLElement

@@ -1,6 +1,7 @@
 import shutil
 import subprocess
 import json
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -9,6 +10,13 @@ from fastapi import APIRouter
 from app.core.config import get_settings
 
 router = APIRouter(tags=['health'])
+
+# Spawning ffmpeg costs about a second on the NAS with a cold page cache, and the health
+# endpoint is polled continuously. Probing on every request made an I/O stall report
+# ffmpeg as missing and returned HTTP 500, so the result is cached for a short window.
+FFMPEG_PROBE_TIMEOUT_SECONDS = 15.0
+FFMPEG_PROBE_CACHE_SECONDS = 60.0
+_ffmpeg_probe: tuple[float, bool] | None = None
 
 
 def can_write(directory: Path) -> bool:
@@ -21,18 +29,32 @@ def can_write(directory: Path) -> bool:
         return False
 
 
-def has_ffmpeg() -> bool:
+def _probe_ffmpeg() -> bool:
     executable = shutil.which('ffmpeg')
     if executable is None:
         return False
-    completed = subprocess.run(
-        [executable, '-version'],
-        check=False,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        timeout=5,
-    )
+    try:
+        completed = subprocess.run(
+            [executable, '-version'],
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=FFMPEG_PROBE_TIMEOUT_SECONDS,
+        )
+    except (subprocess.TimeoutExpired, OSError):
+        # A stalled probe means "not usable right now", never an unhandled 500.
+        return False
     return completed.returncode == 0
+
+
+def has_ffmpeg() -> bool:
+    global _ffmpeg_probe
+    now = time.monotonic()
+    if _ffmpeg_probe is not None and now - _ffmpeg_probe[0] < FFMPEG_PROBE_CACHE_SECONDS:
+        return _ffmpeg_probe[1]
+    result = _probe_ffmpeg()
+    _ffmpeg_probe = (now, result)
+    return result
 
 
 def has_vaapi() -> bool:

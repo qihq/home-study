@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Reque
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import select
+from starlette.requests import ClientDisconnect
 from app.api.deps import DbSession, require_user
 from app.models.recording import Recording
 from app.models.user import User
@@ -90,10 +91,26 @@ def list_recordings(session: DbSession, _user: Annotated[User, Depends(require_u
         for record in records
     ]
 
+async def read_chunk_body(request: Request) -> bytes:
+    """Consume the whole chunk body before anything touches the database.
+
+    FastAPI resolves dependencies in the order they are declared, so putting this one
+    first guarantees the upload has finished before ``DbSession`` (and ``require_user``,
+    which also queries the database) checks a pooled connection out. Reading the body
+    afterwards held one connection per in-flight chunk for the whole upload: a phone
+    uploading several chunks in parallel exhausted the pool and every further request
+    died with a QueuePool timeout instead of uploading.
+    """
+    try:
+        return await request.body()
+    except ClientDisconnect:
+        raise HTTPException(status_code=400, detail={'code': 'CHUNK_UPLOAD_INTERRUPTED', 'message': '分片上传中断，请重试'})
+
+
 @router.put('/recordings/{recording_id}/chunks/{sequence}')
-async def put_chunk(recording_id: str, sequence: int, request: Request, session: DbSession, x_chunk_sha256: Annotated[str, Header()], _user: Annotated[User, Depends(require_user)]):
+async def put_chunk(recording_id: str, sequence: int, body: Annotated[bytes, Depends(read_chunk_body)], request: Request, session: DbSession, x_chunk_sha256: Annotated[str, Header()], _user: Annotated[User, Depends(require_user)]):
     if sequence < 0: raise HTTPException(422, detail={'code':'INVALID_SEQUENCE','message':'片段序号无效'})
-    try: idem = upload_chunk(session, get_recording(session, recording_id), sequence, await request.body(), x_chunk_sha256, request.headers.get('content-type','application/octet-stream'))
+    try: idem = upload_chunk(session, get_recording(session, recording_id), sequence, body, x_chunk_sha256, request.headers.get('content-type','application/octet-stream'))
     except ValueError: raise HTTPException(422, detail={'code':'CHUNK_HASH_MISMATCH','message':'片段校验失败'})
     except ChunkConflict: raise HTTPException(409, detail={'code':'CHUNK_HASH_MISMATCH','message':'片段冲突'})
     return {'idempotent':idem}

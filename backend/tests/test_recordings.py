@@ -41,6 +41,43 @@ def test_complete_reports_missing_sequences(client: TestClient, admin_user) -> N
     assert response.json()['missing_sequences'] == [0, 1]
 
 
+def test_chunk_body_is_read_before_any_database_connection_is_checked_out(
+    client: TestClient, admin_user, monkeypatch,
+) -> None:
+    """Regression: a slow chunk upload must not hold a pooled connection.
+
+    Both the auth dependency and ``get_recording`` query the database. If either runs
+    before the request body has been consumed, every in-flight chunk keeps one pooled
+    connection for the whole upload and a handful of parallel chunks exhausts the pool,
+    which surfaced on the NAS as ``QueuePool limit ... reached`` HTTP 500s.
+    """
+    from starlette.requests import Request
+
+    from app.db.session import get_engine
+
+    headers = auth_cookie(client)
+    recording_id = create_recording(client, headers)
+    body = b'video-fragment'
+
+    original_body = Request.body
+    checked_out_while_reading: list[int] = []
+
+    async def spy(self):
+        checked_out_while_reading.append(get_engine().pool.checkedout())
+        return await original_body(self)
+
+    monkeypatch.setattr(Request, 'body', spy)
+
+    response = client.put(
+        f'/api/recordings/{recording_id}/chunks/0', content=body,
+        headers={**headers, 'X-Chunk-Sha256': hashlib.sha256(body).hexdigest(), 'Content-Type': 'video/mp4'},
+    )
+
+    assert response.status_code == 200
+    assert checked_out_while_reading, 'the chunk body was never read through Request.body()'
+    assert max(checked_out_while_reading) == 0
+
+
 def test_complete_enqueues_one_assembly_job_when_chunks_are_complete(client: TestClient, admin_user) -> None:
     headers = auth_cookie(client)
     recording_id = create_recording(client, headers)
