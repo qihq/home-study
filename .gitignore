@@ -16,3 +16,5 @@ __pycache__/
 *.db-wal
 backend/dictionary-data/
 frontend/test.png
+# 生成的 A4 单词记忆卡（临时产物，仓库里没有任何代码引用）
+a4_word_memory_card*.png
