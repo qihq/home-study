@@ -18,3 +18,8 @@ backend/dictionary-data/
 frontend/test.png
 # 生成的 A4 单词记忆卡（临时产物，仓库里没有任何代码引用）
 a4_word_memory_card*.png
+# 与本项目无关的本地素材（AN-225 研究资料与 3D 网页），不进仓库
+an-225-mriya-3d/
+an225_research/
+# 本地视频联调输出
+local-video-test/
