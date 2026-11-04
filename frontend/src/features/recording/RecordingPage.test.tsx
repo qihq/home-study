@@ -182,6 +182,46 @@ it('caps parallel chunk uploads so a slow network cannot exhaust the server conn
   expect(inFlight).toBe(0)
 })
 
+it('restarts a recorder that never produces data instead of silently recording nothing', async () => {
+  // 回归：MediaRecorder 有时不报错也不产生任何分片（锁屏/切后台后音视频轨失效），
+  // 用户录了一分钟才发现什么都没录到。起录 8 秒还没有第一个分片就重开一次。
+  vi.useFakeTimers({ shouldAdvanceTime: true })
+  const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime })
+  render(<RecordingPage language="english" onBack={vi.fn()} onHome={vi.fn()} onOpenVideos={vi.fn()} />)
+
+  await user.click(screen.getByRole('button', { name: '开始录制' }))
+  expect(FakeMediaRecorder.instances).toHaveLength(1)
+
+  await vi.advanceTimersByTimeAsync(9_000)
+  expect(FakeMediaRecorder.instances).toHaveLength(2)
+  expect(screen.getByText(/正在自动重试/)).toBeVisible()
+
+  await vi.advanceTimersByTimeAsync(9_000)
+  expect(FakeMediaRecorder.instances).toHaveLength(3)
+
+  // 达到重启上限后不再无限重试
+  await vi.advanceTimersByTimeAsync(60_000)
+  expect(FakeMediaRecorder.instances).toHaveLength(3)
+  vi.useRealTimers()
+})
+
+it('does not restart the recorder once chunks have started arriving', async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true })
+  const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime })
+  render(<RecordingPage language="english" onBack={vi.fn()} onHome={vi.fn()} onOpenVideos={vi.fn()} />)
+
+  await user.click(screen.getByRole('button', { name: '开始录制' }))
+  const recorder = FakeMediaRecorder.instances.at(-1)!
+  await vi.advanceTimersByTimeAsync(2_500)
+  emitChunk(recorder)
+
+  // 中途卡住只提示，不重启：重启会插入第二个初始化段，拼出来的视频会坏
+  await vi.advanceTimersByTimeAsync(30_000)
+  expect(FakeMediaRecorder.instances).toHaveLength(1)
+  expect(screen.getByText(/录制似乎已经中断/)).toBeVisible()
+  vi.useRealTimers()
+})
+
 it('finishes submission instead of hanging when the recorder never fires stop', async () => {
   // 回归：锁屏/切后台后 iOS 的 MediaRecorder.stop() 不派发 stop 事件，
   // 旧代码会永远 await 在那个 Promise 上，「结束录制」按钮永久停在提交中。

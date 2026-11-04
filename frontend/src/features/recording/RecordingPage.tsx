@@ -13,10 +13,18 @@ function preferredMime() {
 const NO_MIC_MESSAGE = '没有获取到麦克风声音，请在浏览器与系统设置中允许麦克风权限后重试。'
 const NO_RECORDING_MESSAGE = '这次没有录到任何画面：录制过程中锁屏或切到别的应用会让摄像头中断。请保持页面在前台重新录制。'
 const RECORDING_STALLED_MESSAGE = '录制似乎已经中断（超过 20 秒没有新片段），可能是锁屏或切到了其他应用。建议结束录制后重新开始。'
+const RECORDER_RESTARTING_MESSAGE = '摄像头好像没有开始录制，正在自动重试…'
 const SUBMIT_FAILED_MESSAGE = '提交失败，视频片段仍保存在本机。可以点「补传并提交」重试，或「放弃并重新开始」。'
 
-// 分片每 4 秒产生一个；这么久没有新片段就说明录制已经断了。
-const RECORDING_STALL_MS = 20_000
+// 看门狗每 2 秒走一格，而分片每 4 秒产生一个：
+// 起录 8 秒还没拿到第一个分片，说明 MediaRecorder 静默失效了（不报错、也不产生数据），
+// 此时重启一次是安全的 —— 还没有任何分片，不会插入第二个初始化段。
+const WATCHDOG_INTERVAL_MS = 2_000
+const FIRST_CHUNK_RESTART_TICKS = 4
+const MAX_RECORDER_RESTARTS = 2
+// 已经录到分片之后超过 20 秒没有新分片，只提示不再重启：
+// 中途重启会让服务端拼出一个带两段初始化信息的视频，比少录一段更糟。
+const RECORDING_STALL_TICKS = 10
 // 锁屏/切后台会让音视频轨失效，此时 MediaRecorder.stop() 可能永远不派发 stop 事件。
 const RECORDER_STOP_TIMEOUT_MS = 10_000
 
@@ -119,7 +127,8 @@ export function RecordingPage({ language, onBack, onHome, onOpenVideos, recovery
   const withUploadSlot = useRef<ReturnType<typeof createUploadLimiter> | null>(null)
   withUploadSlot.current ??= createUploadLimiter(MAX_CONCURRENT_UPLOADS)
   const startedAt = useRef<number | null>(null)
-  const lastChunkAt = useRef<number | null>(null)
+  const stalledTicks = useRef(0)
+  const restartAttempts = useRef(0)
   const [abandonedRecoveryId, setAbandonedRecoveryId] = useState<string | null>(null)
   const [localRecovery, setLocalRecovery] = useState<RecordingSession | null>(null)
   // 刚录完但提交失败的会话只存在于本机，优先于登录时读到的 recovery，
@@ -144,9 +153,16 @@ export function RecordingPage({ language, onBack, onHome, onOpenVideos, recovery
     // 这里主动发现「录了半天其实什么都没录到」，而不是等用户点完提交才发现。
     if (state !== 'recording') return
     const timer = window.setInterval(() => {
-      const last = lastChunkAt.current
-      if (last !== null && performance.now() - last > RECORDING_STALL_MS) setMessage(RECORDING_STALLED_MESSAGE)
-    }, 5_000)
+      stalledTicks.current += 1
+      if (sequence.current === 0 && stalledTicks.current >= FIRST_CHUNK_RESTART_TICKS && restartAttempts.current < MAX_RECORDER_RESTARTS) {
+        restartAttempts.current += 1
+        stalledTicks.current = 0
+        setMessage(RECORDER_RESTARTING_MESSAGE)
+        void restartRecorder().catch(() => { setState('error'); setMessage(NO_RECORDING_MESSAGE) })
+        return
+      }
+      if (stalledTicks.current >= RECORDING_STALL_TICKS) setMessage(RECORDING_STALLED_MESSAGE)
+    }, WATCHDOG_INTERVAL_MS)
     return () => window.clearInterval(timer)
   }, [state])
 
@@ -238,11 +254,34 @@ export function RecordingPage({ language, onBack, onHome, onOpenVideos, recovery
       const id = recordingId.current
       const task = (async () => {
         if (id) await store.putSession({ recordingId: id, language, nextSequence: sequence.current, ended: false })
-        lastChunkAt.current = performance.now()
+        stalledTicks.current = 0
         await enqueueUpload(sequenceNumber, event.data)
       })().catch(() => { setState('error'); setMessage('片段上传失败，已保留在本机缓存，请恢复网络后重试。') }).finally(() => pendingUploads.current.delete(task))
       pendingUploads.current.add(task)
     }
+  }
+
+  // 起录后长时间拿不到第一个分片时，用一条全新的音视频流重开 MediaRecorder。
+  // 只在 sequence.current === 0 时调用：此时服务端还没有任何分片，
+  // 重开不会插入第二个初始化段，拼接出来的视频仍然是完整的。
+  async function restartRecorder() {
+    const previous = recorder.current
+    if (previous) {
+      try { previous.stop() } catch { /* 已经死掉的 recorder 再 stop 会抛错 */ }
+      stopStream(previous.stream)
+      recorder.current = null
+    }
+    const stream = await openCamera(camera)
+    if (!hasLiveAudio(stream)) {
+      stopStream(stream)
+      if (video.current) video.current.srcObject = null
+      throw new Error('NO_AUDIO_TRACK')
+    }
+    const instance = new MediaRecorder(stream, preferredMime() ? { mimeType: preferredMime() } : undefined)
+    configureRecorder(instance)
+    instance.start(4000)
+    recorder.current = instance
+    stalledTicks.current = 0
   }
 
   async function start() {
@@ -270,7 +309,7 @@ export function RecordingPage({ language, onBack, onHome, onOpenVideos, recovery
       }
       const instance = new MediaRecorder(stream, preferredMime() ? { mimeType: preferredMime() } : undefined)
       configureRecorder(instance)
-      instance.start(4000); recorder.current = instance; startedAt.current = performance.now(); lastChunkAt.current = performance.now(); setElapsedMs(0); setLocalRecovery(null); setState('recording'); setMessage('录制中，片段正在保存到 NAS。')
+      instance.start(4000); recorder.current = instance; startedAt.current = performance.now(); stalledTicks.current = 0; restartAttempts.current = 0; setElapsedMs(0); setLocalRecovery(null); setState('recording'); setMessage('录制中，片段正在保存到 NAS。')
     } catch (error) { setState('error'); setMessage(error instanceof Error && error.message === 'NO_AUDIO_TRACK' ? NO_MIC_MESSAGE : '无法打开摄像头或麦克风，请检查浏览器权限和 HTTPS。') }
   }
 
