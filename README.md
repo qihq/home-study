@@ -112,6 +112,8 @@ curl http://127.0.0.1:6633/api/health                   # 需返回 "worker": tr
 - **电子辞典 AI 兼容 DeepSeek / OpenCode Go**：请求开启 JSON 模式时，若 prompt 未提及 JSON 会自动补一条 system 指令；上游（含网关轮询到的部分节点）不支持 `response_format` 时，自动去掉该参数重试一次。修复设置页「测试连接」在 DeepSeek 系列模型上必然失败（上游返回 400 `prompt must contain 'json'`），以及网关多上游轮询造成的偶发请求失败。
 - 设置页「测试连接」读取的是已保存的配置：请先保存 AI 配置，再点测试。
 
+排障手册与接入细节见 [docs/AI-PROVIDER-TROUBLESHOOTING.md](docs/AI-PROVIDER-TROUBLESHOOTING.md)。
+
 #### v0.3.1
 
 - **发音全面升级（真人录音优先）**：英文单词优先 Wiktionary 真人录音（Wikimedia Commons 直连，自动选英 / 美音与预转码 mp3，Ogg 自动转码），Free Dictionary、有道、百度 TTS 逐级兜底（有道瞬时失败自动重试），最后才回退 MiMo TTS；本地缓存版本化，旧音频自动刷新；发音源熔断状态落盘。
@@ -256,6 +258,8 @@ Sample variables are in [.env.example](.env.example); voice privacy and backup g
 
 - **The dictionary AI now works with DeepSeek / OpenCode Go** — when JSON mode is requested and no prompt mentions JSON, a system instruction is added automatically; if an upstream (including nodes a gateway rotates to) rejects `response_format`, the request is retried once without it. This fixes the settings-page “test connection” button failing for every DeepSeek model (upstream 400 `prompt must contain 'json'`) and the intermittent failures caused by gateways spreading requests across upstreams.
 - “Test connection” uses the saved configuration: save the AI settings first, then test.
+
+See [docs/AI-PROVIDER-TROUBLESHOOTING.md](docs/AI-PROVIDER-TROUBLESHOOTING.md) for the troubleshooting guide and provider setup.
 
 #### v0.3.1
 
