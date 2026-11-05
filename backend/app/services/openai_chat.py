@@ -8,6 +8,33 @@ from urllib.request import Request, urlopen
 # so identify this client explicitly.
 USER_AGENT = 'family-learning/0.1'
 
+# DeepSeek (and a few gateways that route to it) reject `response_format: json_object`
+# with 400 InvalidParameter unless the prompt itself mentions JSON. The dictionary prompt
+# already says so, but short prompts such as the settings-page connection test ('apple')
+# do not, which made that button fail for every DeepSeek model.
+JSON_HINT = 'Respond with a single JSON object only.'
+
+
+def _ensure_json_hint(messages: list[dict]) -> list[dict]:
+    if any('json' in str(message.get('content', '')).lower() for message in messages):
+        return messages
+    prepared = list(messages)
+    if prepared and prepared[0].get('role') == 'system' and isinstance(prepared[0].get('content'), str):
+        prepared[0] = {**prepared[0], 'content': f"{prepared[0]['content']}\n{JSON_HINT}"}
+    else:
+        prepared.insert(0, {'role': 'system', 'content': JSON_HINT})
+    return prepared
+
+
+# Upstreams that reject JSON mode in their own words. Retrying without response_format keeps
+# one flaky route in a gateway from failing the whole lookup.
+JSON_MODE_REJECTIONS = ('json_object', 'response_format', 'must contain', 'not yet supported')
+
+
+def _rejects_json_mode(detail: str) -> bool:
+    text = (detail or '').lower()
+    return any(token in text for token in JSON_MODE_REJECTIONS)
+
 
 class OpenAiChatError(Exception):
     """A stable error code, plus the provider's own explanation when it sent one.
@@ -70,11 +97,24 @@ class OpenAiChatClient:
         return f'{self.base_url}/chat/completions'
 
     def complete(self, messages: list[dict]) -> str:
+        prepared = _ensure_json_hint(list(messages))
+        try:
+            return self._post(prepared, json_mode=True)
+        except OpenAiChatError as error:
+            # Some upstreams behind a gateway (OpenCode Go routes to several) answer 400
+            # "this feature is not yet supported" for response_format. The prompts already
+            # demand JSON, so retry once without the parameter instead of failing the lookup.
+            if error.code == 'AI_REQUEST_FAILED' and _rejects_json_mode(error.detail):
+                return self._post(prepared, json_mode=False)
+            raise
+
+    def _post(self, messages: list[dict], json_mode: bool) -> str:
         payload: dict = {
             'model': self.model,
             'messages': messages,
-            'response_format': {'type': 'json_object'},
         }
+        if json_mode:
+            payload['response_format'] = {'type': 'json_object'}
         if self.temperature is not None:
             # Only send it when the caller configured one: a few providers reject an explicit
             # temperature outright, and the dictionary wants a low value for stable JSON.

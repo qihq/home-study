@@ -194,6 +194,76 @@ def test_openai_chat_sends_a_stable_session_id_per_conversation(monkeypatch) -> 
     assert seen[2] != seen[0], 'a new conversation gets a new session id'
 
 
+def test_openai_chat_adds_a_json_hint_when_the_prompt_has_none(monkeypatch) -> None:
+    """DeepSeek rejects json_object with 400 unless the prompt mentions JSON; short prompts
+    like the settings-page probe ('apple') must still be accepted."""
+    from app.services.openai_chat import JSON_HINT, OpenAiChatClient
+
+    captured: dict = {}
+
+    def fake_urlopen(request, timeout):
+        captured['payload'] = json.loads(request.data)
+
+        class Response:
+            def read(self):
+                return b'{"choices":[{"message":{"content":"{}"}}]}'
+
+            def __enter__(self): return self
+            def __exit__(self, *_): return False
+
+        return Response()
+
+    monkeypatch.setattr('app.services.openai_chat.urlopen', fake_urlopen)
+
+    OpenAiChatClient('ai-secret-abcd', 'https://provider.example/v1', 'deepseek-v4.1-flash').complete([
+        {'role': 'user', 'content': 'apple'},
+    ])
+    assert captured['payload']['messages'][0] == {'role': 'system', 'content': JSON_HINT}
+    assert captured['payload']['messages'][-1] == {'role': 'user', 'content': 'apple'}
+
+    OpenAiChatClient('ai-secret-abcd', 'https://provider.example/v1', 'deepseek-v4.1-flash').complete([
+        {'role': 'system', 'content': 'Return one JSON object.'},
+        {'role': 'user', 'content': 'apple'},
+    ])
+    assert len(captured['payload']['messages']) == 2, 'a prompt that already mentions JSON is left alone'
+    assert JSON_HINT not in captured['payload']['messages'][0]['content']
+
+
+def test_openai_chat_retries_without_json_mode_when_the_upstream_rejects_it(monkeypatch) -> None:
+    """OpenCode Go spreads requests over several upstreams; one of them answers 400
+    "this feature is not yet supported" when response_format is present."""
+    from app.services.openai_chat import OpenAiChatClient
+
+    payloads: list[dict] = []
+    body = b'{"error":{"type":"invalid_request_error","message":"this feature is not yet supported by atlas"}}'
+
+    def fake_urlopen(request, timeout):
+        payload = json.loads(request.data)
+        payloads.append(payload)
+
+        class Response:
+            def read(self):
+                return b'{"choices":[{"message":{"content":"{\\"ok\\":true}"}}]}'
+
+            def __enter__(self): return self
+            def __exit__(self, *_): return False
+
+        if 'response_format' in payload:
+            raise HTTPError('https://provider.example/v1/chat/completions', 400, 'bad request', {}, BytesIO(body))
+        return Response()
+
+    monkeypatch.setattr('app.services.openai_chat.urlopen', fake_urlopen)
+
+    response = OpenAiChatClient('ai-secret-abcd', 'https://provider.example/v1', 'deepseek-v4.1-flash').complete([
+        {'role': 'user', 'content': 'apple'},
+    ])
+
+    assert response == '{"ok":true}'
+    assert len(payloads) == 2
+    assert payloads[0]['response_format'] == {'type': 'json_object'}
+    assert 'response_format' not in payloads[1]
+
+
 def test_openai_chat_surfaces_the_provider_error_detail(monkeypatch) -> None:
     """A 403 "subscription required" must be visible instead of a bare gateway failure."""
     from app.services.openai_chat import OpenAiChatClient, OpenAiChatError
